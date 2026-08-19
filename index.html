@@ -1977,8 +1977,35 @@ function generateBalancePdf(){
   const a = section(doc, y, '1','สินทรัพย์',[60,122,90]);
   const l = section(doc, a.finalY+22, '2','หนี้สิน',[166,59,50]);
   const e = section(doc, l.finalY+22, '3','ส่วนทุน',[168,121,31]);
+  const inc = section(doc, e.finalY+22, '4','รายได้สะสม (ตั้งแต่เริ่มบันทึกบัญชี)',[60,122,90]);
+  const exp = section(doc, inc.finalY+22, '5','ค่าใช้จ่ายสะสม (ตั้งแต่เริ่มบันทึกบัญชี)',[166,59,50]);
+
+  const netIncome = inc.total - exp.total;
+  const rhs = l.total + e.total + netIncome;
+
+  let py = exp.finalY + 26;
+  if (py > 700){ doc.addPage(); py = 50; }
   doc.setFont('Sarabun','bold'); doc.setFontSize(12);
-  doc.text(`สินทรัพย์สุทธิ (Net worth): ${moneyPlain(a.total-l.total)} บาท`, 40, e.finalY+26);
+  doc.text('สมการบัญชี: สินทรัพย์ = หนี้สิน + ทุน + (รายได้ - ค่าใช้จ่าย)', 40, py);
+  py += 18;
+  doc.setFont('Sarabun','normal'); doc.setFontSize(10);
+  doc.text(`สินทรัพย์ ${moneyPlain(a.total)} บาท  =  หนี้สิน ${moneyPlain(l.total)} + ทุน ${moneyPlain(e.total)} + (รายได้ ${moneyPlain(inc.total)} - ค่าใช้จ่าย ${moneyPlain(exp.total)})`, 40, py, {maxWidth: 515});
+  py += 16;
+  doc.text(`  =  หนี้สิน ${moneyPlain(l.total)} + ทุน ${moneyPlain(e.total)} + รายได้สุทธิสะสม (${netIncome>=0?'':'-'}${moneyPlain(Math.abs(netIncome))})`, 40, py, {maxWidth: 515});
+  py += 20;
+  doc.setFont('Sarabun','bold');
+  doc.text(`รวมด้านขวา (หนี้สิน+ทุน+รายได้สุทธิ) = ${moneyPlain(rhs)} บาท`, 40, py);
+  py += 16;
+  const diff = a.total - rhs;
+  doc.setFont('Sarabun', Math.abs(diff) < 1 ? 'normal' : 'bold');
+  if (Math.abs(diff) < 1){
+    doc.setTextColor(60,122,90);
+    doc.text(`✓ ตรวจสอบสมการ: สินทรัพย์ = ด้านขวา (ผลต่าง ${moneyPlain(diff)} บาท)`, 40, py);
+  } else {
+    doc.setTextColor(166,59,50);
+    doc.text(`⚠ สมการไม่สมดุล: สินทรัพย์ - ด้านขวา = ${moneyPlain(diff)} บาท`, 40, py);
+  }
+  doc.setTextColor(20);
   pdfFooterAndSave(doc, `งบดุล-${asOf}.pdf`);
 }
 
