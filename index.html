@@ -240,6 +240,10 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M9 13h6M9 17h6M9 9h2"/></svg>
         รายงาน PDF
       </a></li>
+      <li><a data-view="groups">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="8" cy="17" r="3"/><circle cx="17" cy="17" r="3"/></svg>
+        จัดการ Query Group
+      </a></li>
       <li><a data-view="settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1 1.55V21a2 2 0 11-4 0v-.09a1.7 1.7 0 00-1-1.55 1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.34-1.87 1.7 1.7 0 00-1.55-1H3a2 2 0 110-4h.09a1.7 1.7 0 001.55-1 1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.87.34H9a1.7 1.7 0 001-1.55V3a2 2 0 114 0v.09a1.7 1.7 0 001 1.55 1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87V9a1.7 1.7 0 001.55 1H21a2 2 0 110 4h-.09a1.7 1.7 0 00-1.55 1z"/></svg>
         ตั้งค่า
@@ -283,7 +287,7 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
           <canvas id="chartMonthly" height="200"></canvas>
         </div>
         <div class="card">
-          <h3>สัดส่วนสินทรัพย์ตามกลุ่ม</h3>
+          <h3>สัดส่วนตามหมวดหมู่บัญชี</h3>
           <canvas id="chartAssets" height="200"></canvas>
         </div>
       </div>
@@ -513,6 +517,59 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
       </div>
     </section>
 
+    <!-- ===================== QUERY GROUP MANAGEMENT ===================== -->
+    <section class="view" id="view-groups">
+      <div class="topbar">
+        <div>
+          <h2>จัดการ Query Group</h2>
+          <div class="sub">สร้าง แก้ไข ลบกลุ่ม และเพิ่ม/ลบบัญชีในแต่ละกลุ่ม (ตาราง q_grp / qmapa_code)</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:16px;">
+        <div class="form-grid">
+          <div class="field full" style="flex-direction:row; gap:10px; display:flex; align-items:flex-end;">
+            <div style="flex:1;">
+              <label>ชื่อกลุ่มใหม่</label>
+              <input type="text" id="newGrpName" placeholder="เช่น เงินฝากออมทรัพย์ทั้งหมด">
+            </div>
+            <button class="pill-btn primary" id="btnCreateGrp">+ สร้างกลุ่มใหม่</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="card">
+          <h3>รายการกลุ่มทั้งหมด</h3>
+          <div class="table-wrap">
+            <table class="ledger" id="tblGrpList">
+              <thead><tr><th>รหัส</th><th>ชื่อกลุ่ม</th><th>จำนวนบัญชี</th><th></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3 id="grpDetailTitle">เลือกกลุ่มด้านซ้ายเพื่อจัดการรายการบัญชี</h3>
+          <div id="grpDetailBody" style="display:none;">
+            <div class="table-wrap" style="margin-bottom:14px;">
+              <table class="ledger" id="tblGrpItems">
+                <thead><tr><th>รหัส</th><th>ชื่อบัญชี</th><th>ประเภท</th><th></th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="field full" style="flex-direction:row; gap:10px; display:flex; align-items:flex-end;">
+              <div style="flex:1;">
+                <label>เพิ่มบัญชีเข้ากลุ่มนี้</label>
+                <select id="selAddItemToGrp"></select>
+              </div>
+              <button class="pill-btn primary" id="btnAddItemToGrp">+ เพิ่มเข้ากลุ่ม</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- ===================== SETTINGS ===================== -->
     <section class="view" id="view-settings">
       <div class="topbar">
@@ -565,7 +622,7 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
           </p>
           <div class="field" style="margin-bottom:10px;">
             <label>Google OAuth Client ID</label>
-            <input type="text" id="gdriveClientId" placeholder="xxxxxxxx.apps.googleusercontent.com">
+            <input type="text" id="gdriveClientId" placeholder="xxxxxxxx.apps.googleusercontent.com" value="672845687225-4ndosqu1lkc4kajbh54534u45u7gdjdr.apps.googleusercontent.com">
           </div>
           <div class="row-flex" style="gap:10px; margin-bottom:10px;">
             <button class="pill-btn" id="btnGdriveSaveClientId">บันทึก Client ID</button>
@@ -788,6 +845,7 @@ async function persistDb(){
 const GDRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const GDRIVE_FILENAME = 'accounting.db';
 const GDRIVE_POLL_MS = 12000;
+const GDRIVE_DEFAULT_CLIENT_ID = '672845687225-4ndosqu1lkc4kajbh54534u45u7gdjdr.apps.googleusercontent.com';
 
 const gdrive = {
   clientId: null,
@@ -809,10 +867,10 @@ function gdriveSetStatus(text){
 }
 
 async function gdriveRestoreState(){
-  gdrive.clientId = await idbKvGet('gdrive_client_id', null);
+  gdrive.clientId = await idbKvGet('gdrive_client_id', GDRIVE_DEFAULT_CLIENT_ID);
   gdrive.fileId = await idbKvGet('gdrive_file_id', null);
   gdrive.lastKnownModifiedTime = await idbKvGet('gdrive_last_modified', null);
-  gdrive.enabled = await idbKvGet('gdrive_sync_enabled', false);
+  gdrive.enabled = await idbKvGet('gdrive_sync_enabled', true);
   if (gdrive.clientId) document.getElementById('gdriveClientId').value = gdrive.clientId;
   document.getElementById('toggleGdriveSync').checked = !!gdrive.enabled;
   if (!gdrive.clientId) return;
@@ -1092,6 +1150,7 @@ async function boot(){
   wireAddForm();
   wireLedgerView();
   wireReports();
+  wireGroupsView();
   await restorePrefs();
   await gdriveRestoreState();
   refreshAll();
@@ -1193,6 +1252,7 @@ function wireNav(){
       if (a.dataset.view==='ledger') renderLedger();
       if (a.dataset.view==='add') populateAccountSelects();
       if (a.dataset.view==='reports') populateReportMonths();
+      if (a.dataset.view==='groups') renderGroupsView();
     });
   });
   document.getElementById('btnGoLedger').addEventListener('click', ()=>{
@@ -1309,17 +1369,13 @@ function renderDashboard(){
   const trend = trendMonths.map(m=>({m, ...monthIncomeExpense(m)}));
   renderMonthlyChart(trend);
 
-  // asset allocation by custom group (fallback: raw asset accounts w/ nonzero balance)
-  const groupBalances = [];
-  qGrpCache.forEach(g=>{
-    const codes = qMapCache[g.qcode]||[];
-    const assetCodes = codes.filter(c=> accType(c)==='1');
-    if (!assetCodes.length) return;
+  // breakdown by หมวดหมู่บัญชี (account category: Asset/Liability/Equity/Income/Expense)
+  const categoryBalances = ['1','2','3','4','5'].map(t=>{
     let bal = 0;
-    assetCodes.forEach(c=> bal += balanceAsOf(c, asOf));
-    if (bal) groupBalances.push({label:g.qdesc, value:bal});
-  });
-  renderAssetChart(groupBalances);
+    accChartCache.filter(c=>c.type_acc===t).forEach(c=> bal += balanceAsOf(c.code, asOf));
+    return {label: TYPE_NAMES[t], value: Math.abs(bal)};
+  }).filter(g=>g.value>0);
+  renderAssetChart(categoryBalances);
 }
 
 function setDelta(id, v){
@@ -1881,6 +1937,159 @@ function pdfFooterAndSave(doc, filename){
 function wireReports(){
   document.getElementById('btnRepMonthly').addEventListener('click', generateMonthlyPdf);
   document.getElementById('btnRepBalance').addEventListener('click', generateBalancePdf);
+}
+
+/* ================================================================
+   QUERY GROUP MANAGEMENT (q_grp / qmapa_code CRUD)
+   ================================================================ */
+let selectedGrpForEdit = null;
+
+function wireGroupsView(){
+  document.getElementById('btnCreateGrp').addEventListener('click', createQueryGroup);
+  document.getElementById('newGrpName').addEventListener('keydown', (e)=>{
+    if (e.key==='Enter'){ e.preventDefault(); createQueryGroup(); }
+  });
+  document.getElementById('btnAddItemToGrp').addEventListener('click', addItemToSelectedGroup);
+}
+
+function createQueryGroup(){
+  const nameInput = document.getElementById('newGrpName');
+  const name = nameInput.value.trim();
+  if (!name){ toast('กรอกชื่อกลุ่มก่อน'); return; }
+  if (qGrpCache.some(g=>g.qdesc.trim().toLowerCase()===name.toLowerCase())){
+    toast('มีกลุ่มชื่อนี้อยู่แล้ว'); return;
+  }
+  const nextCode = qAll("SELECT COALESCE(MAX(qcode),0)+1 m FROM q_grp")[0].m;
+  const now = new Date().toISOString().replace('T',' ').slice(0,19);
+  db.run("INSERT INTO q_grp(qcode, qdesc, create_date) VALUES (?,?,?)", [nextCode, name, now]);
+  nameInput.value = '';
+  loadCaches();
+  populateLedgerSelects(); // keep the group chips on the Search page in sync
+  selectedGrpForEdit = nextCode;
+  renderGroupsView();
+  persistDb();
+  toast(`สร้างกลุ่ม "${name}" แล้ว`);
+}
+
+function renameQueryGroup(qcode, currentName){
+  const name = prompt('เปลี่ยนชื่อกลุ่มเป็น:', currentName);
+  if (name===null) return;
+  const trimmed = name.trim();
+  if (!trimmed){ toast('ชื่อกลุ่มต้องไม่ว่าง'); return; }
+  db.run("UPDATE q_grp SET qdesc=? WHERE qcode=?", [trimmed, qcode]);
+  loadCaches();
+  populateLedgerSelects();
+  renderGroupsView();
+  persistDb();
+  toast('เปลี่ยนชื่อกลุ่มแล้ว');
+}
+
+function deleteQueryGroup(qcode, name){
+  const itemCount = (qMapCache[qcode]||[]).length;
+  const msg = itemCount
+    ? `ลบกลุ่ม "${name}" และเลิกเชื่อมโยง ${itemCount} บัญชีออกจากกลุ่มนี้? (ไม่ลบบัญชีหรือรายการบัญชีจริง แค่เลิกจัดกลุ่ม)`
+    : `ลบกลุ่ม "${name}"?`;
+  if (!confirm(msg)) return;
+  db.run("DELETE FROM qmapa_code WHERE q_grp=?", [qcode]);
+  db.run("DELETE FROM q_grp WHERE qcode=?", [qcode]);
+  if (selectedGrpForEdit === qcode) selectedGrpForEdit = null;
+  loadCaches();
+  populateLedgerSelects();
+  renderGroupsView();
+  persistDb();
+  toast(`ลบกลุ่ม "${name}" แล้ว`);
+}
+
+function addItemToSelectedGroup(){
+  if (selectedGrpForEdit===null){ toast('เลือกกลุ่มก่อน'); return; }
+  const sel = document.getElementById('selAddItemToGrp');
+  const code = sel.value;
+  if (!code){ toast('เลือกบัญชีก่อน'); return; }
+  const existing = qMapCache[selectedGrpForEdit] || [];
+  if (existing.includes(code)){ toast('บัญชีนี้อยู่ในกลุ่มนี้แล้ว'); return; }
+  const now = new Date().toISOString().replace('T',' ').slice(0,19);
+  db.run("INSERT INTO qmapa_code(a_code, q_grp, create_date) VALUES (?,?,?)", [code, selectedGrpForEdit, now]);
+  loadCaches();
+  populateLedgerSelects();
+  renderGroupsView();
+  persistDb();
+  toast(`เพิ่ม ${accDesc(code)} เข้ากลุ่มแล้ว`);
+}
+
+function removeItemFromGroup(qcode, code){
+  db.run("DELETE FROM qmapa_code WHERE q_grp=? AND a_code=?", [qcode, code]);
+  loadCaches();
+  populateLedgerSelects();
+  renderGroupsView();
+  persistDb();
+  toast(`นำ ${accDesc(code)} ออกจากกลุ่มแล้ว`);
+}
+
+function renderGroupsView(){
+  const tb = document.querySelector('#tblGrpList tbody');
+  if (!qGrpCache.length){
+    tb.innerHTML = `<tr class="empty-row"><td colspan="4">ยังไม่มีกลุ่ม — สร้างกลุ่มใหม่ด้านบน</td></tr>`;
+  } else {
+    tb.innerHTML = qGrpCache.map(g=>{
+      const count = (qMapCache[g.qcode]||[]).length;
+      const isSelected = selectedGrpForEdit === g.qcode;
+      return `<tr style="${isSelected?'background:rgba(168,121,31,.1);':''}">
+        <td>${g.qcode}</td>
+        <td>${escapeHtml(g.qdesc)}</td>
+        <td>${count}</td>
+        <td style="white-space:nowrap;">
+          <button class="pill-btn" style="padding:4px 10px;" id="grpSelect${g.qcode}">จัดการรายการ</button>
+          <button class="pill-btn" style="padding:4px 10px;" id="grpRename${g.qcode}">แก้ชื่อ</button>
+          <button class="pill-btn" style="padding:4px 10px; color:var(--rust); border-color:var(--rust);" id="grpDelete${g.qcode}">ลบ</button>
+        </td>
+      </tr>`;
+    }).join('');
+    qGrpCache.forEach(g=>{
+      document.getElementById(`grpSelect${g.qcode}`).addEventListener('click', ()=>{
+        selectedGrpForEdit = g.qcode;
+        renderGroupsView();
+      });
+      document.getElementById(`grpRename${g.qcode}`).addEventListener('click', ()=> renameQueryGroup(g.qcode, g.qdesc));
+      document.getElementById(`grpDelete${g.qcode}`).addEventListener('click', ()=> deleteQueryGroup(g.qcode, g.qdesc));
+    });
+  }
+
+  const detailTitle = document.getElementById('grpDetailTitle');
+  const detailBody = document.getElementById('grpDetailBody');
+  if (selectedGrpForEdit===null || !qGrpCache.some(g=>g.qcode===selectedGrpForEdit)){
+    detailTitle.textContent = 'เลือกกลุ่มด้านซ้ายเพื่อจัดการรายการบัญชี';
+    detailBody.style.display = 'none';
+    return;
+  }
+  const grp = qGrpCache.find(g=>g.qcode===selectedGrpForEdit);
+  detailTitle.textContent = `รายการบัญชีในกลุ่ม "${grp.qdesc}"`;
+  detailBody.style.display = 'block';
+
+  const memberCodes = qMapCache[selectedGrpForEdit] || [];
+  const itemsTb = document.querySelector('#tblGrpItems tbody');
+  if (!memberCodes.length){
+    itemsTb.innerHTML = `<tr class="empty-row"><td colspan="4">ยังไม่มีบัญชีในกลุ่มนี้</td></tr>`;
+  } else {
+    itemsTb.innerHTML = memberCodes.map(code=>{
+      const acc = accChartCache.find(c=>c.code===code);
+      const type = acc ? acc.type_acc : null;
+      return `<tr>
+        <td>${code}</td>
+        <td>${escapeHtml(acc? acc.cdesc : '(ไม่พบบัญชีนี้ในผังบัญชี)')}</td>
+        <td>${type? `<span class="badge ${TYPE_BADGE[type]}">${TYPE_NAMES[type]}</span>` : ''}</td>
+        <td><button class="pill-btn" style="padding:4px 10px;" id="grpItemDel_${code}">นำออก</button></td>
+      </tr>`;
+    }).join('');
+    memberCodes.forEach(code=>{
+      document.getElementById(`grpItemDel_${code}`).addEventListener('click', ()=> removeItemFromGroup(selectedGrpForEdit, code));
+    });
+  }
+
+  const addSel = document.getElementById('selAddItemToGrp');
+  const availableToAdd = accChartCache.filter(c=>c.use_flag && !memberCodes.includes(c.code));
+  addSel.innerHTML = availableToAdd.length
+    ? availableToAdd.map(c=>`<option value="${c.code}">${c.code} — ${escapeHtml(c.cdesc)}</option>`).join('')
+    : `<option value="">— ทุกบัญชีอยู่ในกลุ่มนี้แล้ว —</option>`;
 }
 
 function generateMonthlyPdf(){
