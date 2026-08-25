@@ -616,7 +616,7 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
           <h3>ซิงค์ข้ามอุปกรณ์ผ่าน Google Drive</h3>
           <p class="small-muted">
             ซิงค์ฐานข้อมูลอัตโนมัติ (ทุก ~12 วินาที) ระหว่างอุปกรณ์ผ่าน Google Drive ของคุณเอง —
-            ใช้สิทธิ์แบบจำกัดเฉพาะไฟล์ที่แอปนี้สร้างเท่านั้น (ไม่แตะไฟล์อื่นใน Drive)
+            ใช้สิทธิ์แบบจำกัดเฉพาะไฟล์ที่แอปนี้สร้าง/เปิด/ถูกแชร์มาให้เท่านั้น (ไม่แตะไฟล์อื่นใน Drive)
             <b>ต้องเปิดแอปนี้ผ่านลิงก์เว็บ (https://) ไม่ใช่ไฟล์ในเครื่อง</b> และตั้งค่า Google Cloud project ก่อน 1 ครั้ง
             (ดูขั้นตอนในไฟล์ <code>GOOGLE_DRIVE_SYNC_SETUP.md</code> ที่แนบมา)
           </p>
@@ -624,12 +624,34 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
             <label>Google OAuth Client ID</label>
             <input type="text" id="gdriveClientId" placeholder="xxxxxxxx.apps.googleusercontent.com" value="672845687225-4ndosqu1lkc4kajbh54534u45u7gdjdr.apps.googleusercontent.com">
           </div>
+          <div class="field" style="margin-bottom:10px;">
+            <label>Google API Key (สำหรับเลือกไฟล์ที่ถูกแชร์มา — จำเป็นเฉพาะบัญชีที่ 2 ขึ้นไป)</label>
+            <input type="text" id="gdriveApiKey" placeholder="AIzaSy...">
+          </div>
+          <div class="field" style="margin-bottom:10px;">
+            <label>Google Cloud Project Number (ไม่บังคับ แต่แนะนำให้ใส่)</label>
+            <input type="text" id="gdriveProjectNumber" placeholder="เช่น 672845687225">
+          </div>
           <div class="row-flex" style="gap:10px; margin-bottom:10px;">
-            <button class="pill-btn" id="btnGdriveSaveClientId">บันทึก Client ID</button>
+            <button class="pill-btn" id="btnGdriveSaveClientId">บันทึกการตั้งค่า</button>
             <button class="pill-btn brass" id="btnGdriveConnect">เชื่อมต่อ Google Drive</button>
             <button class="pill-btn" id="btnGdriveDisconnect" style="display:none;">ตัดการเชื่อมต่อ</button>
           </div>
           <div id="gdriveStatus" class="small-muted" style="margin-bottom:10px;">ยังไม่ได้เชื่อมต่อ</div>
+
+          <div id="gdriveFileChoice" style="display:none; margin-bottom:14px; padding:14px; border:1px dashed var(--brass); border-radius:8px; background:var(--brass-soft);">
+            <p style="margin:0 0 10px; font-size:13px;">
+              บัญชีนี้ยังไม่เจอไฟล์ฐานข้อมูลของตัวเอง — เลือกอย่างใดอย่างหนึ่ง:
+            </p>
+            <div class="row-flex" style="gap:10px; flex-wrap:wrap;">
+              <button class="pill-btn primary" id="btnGdriveCreateNew">สร้างไฟล์ฐานข้อมูลใหม่ (สำหรับคนแรกที่เริ่มระบบเท่านั้น)</button>
+              <button class="pill-btn" id="btnGdriveOpenPicker">เลือกไฟล์ที่ถูกแชร์มา (บัญชีที่ 2 ขึ้นไป)</button>
+            </div>
+            <p class="small-muted" style="margin:10px 0 0;">
+              ถ้าเป็นบัญชีที่ 2 ขึ้นไป ต้องให้เจ้าของไฟล์แชร์ <code>accounting.db</code> ผ่าน drive.google.com ให้อีเมลนี้ก่อน แล้วค่อยกด "เลือกไฟล์ที่ถูกแชร์มา"
+            </p>
+          </div>
+
           <div class="row-flex" style="justify-content:space-between; margin-bottom:10px;">
             <span>เปิดใช้งาน auto-sync (ทุก ~12 วินาที)</span>
             <label class="switch"><input type="checkbox" id="toggleGdriveSync"><span class="slider"></span></label>
@@ -849,6 +871,8 @@ const GDRIVE_DEFAULT_CLIENT_ID = '672845687225-4ndosqu1lkc4kajbh54534u45u7gdjdr.
 
 const gdrive = {
   clientId: null,
+  apiKey: null,
+  projectNumber: null,
   tokenClient: null,
   accessToken: null,
   tokenExpiresAt: 0,
@@ -868,10 +892,14 @@ function gdriveSetStatus(text){
 
 async function gdriveRestoreState(){
   gdrive.clientId = await idbKvGet('gdrive_client_id', GDRIVE_DEFAULT_CLIENT_ID);
+  gdrive.apiKey = await idbKvGet('gdrive_api_key', null);
+  gdrive.projectNumber = await idbKvGet('gdrive_project_number', null);
   gdrive.fileId = await idbKvGet('gdrive_file_id', null);
   gdrive.lastKnownModifiedTime = await idbKvGet('gdrive_last_modified', null);
   gdrive.enabled = await idbKvGet('gdrive_sync_enabled', true);
   if (gdrive.clientId) document.getElementById('gdriveClientId').value = gdrive.clientId;
+  if (gdrive.apiKey) document.getElementById('gdriveApiKey').value = gdrive.apiKey;
+  if (gdrive.projectNumber) document.getElementById('gdriveProjectNumber').value = gdrive.projectNumber;
   document.getElementById('toggleGdriveSync').checked = !!gdrive.enabled;
   if (!gdrive.clientId) return;
 
@@ -973,32 +1001,106 @@ async function gdriveAfterConnect(){
   }catch(_){ /* non-fatal */ }
 
   if (!gdrive.fileId){
-    await gdriveFindOrCreateFile();
+    // search for a file THIS account created/opened before (covers the common case:
+    // same Google account reconnecting from a second device) — but do NOT silently
+    // create a new one if nothing is found, since that would be wrong for a second,
+    // different Google account joining an existing shared ledger.
+    const found = await gdriveSearchForOwnFile();
+    if (!found){
+      document.getElementById('gdriveFileChoice').style.display = 'block';
+      gdriveSetStatus(`เชื่อมต่อแล้ว${gdrive.signedInEmail? ' ('+gdrive.signedInEmail+')':''} — ยังไม่พบไฟล์ฐานข้อมูลของบัญชีนี้ เลือกตัวเลือกด้านล่าง`);
+      return;
+    }
   }
+  document.getElementById('gdriveFileChoice').style.display = 'none';
   gdriveSetStatus(`เชื่อมต่อแล้ว${gdrive.signedInEmail? ' ('+gdrive.signedInEmail+')':''} — ไฟล์บน Drive พร้อมใช้งาน`);
   if (gdrive.enabled) gdriveStartPolling();
 }
 
-async function gdriveFindOrCreateFile(){
-  // drive.file scope only shows files the app created, so a plain name search is safe/scoped
+async function gdriveSearchForOwnFile(){
+  // drive.file scope only returns files this specific account created/opened with the app
   const q = encodeURIComponent(`name='${GDRIVE_FILENAME}' and trashed=false`);
   const res = await gdriveApi(`files?q=${q}&fields=files(id,modifiedTime)&spaces=drive`);
   const data = await res.json();
   if (data.files && data.files.length){
     gdrive.fileId = data.files[0].id;
-    gdrive.lastKnownModifiedTime = data.files[0].modifiedTime;
-  } else {
-    const createRes = await gdriveApi('files?fields=id,modifiedTime', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ name: GDRIVE_FILENAME })
-    });
-    const created = await createRes.json();
-    gdrive.fileId = created.id;
-    gdrive.lastKnownModifiedTime = created.modifiedTime;
+    await idbKvSet('gdrive_file_id', gdrive.fileId);
+    // deliberately NOT setting lastKnownModifiedTime here — this may be the first time
+    // this specific device has ever seen this file, so the very next gdriveCheckAndPull()
+    // must be free to compare against whatever was last stored locally (often null on a
+    // fresh device) and actually pull the real content, rather than assuming we're already
+    // in sync just because we found the file's current metadata.
+    return true;
   }
+  return false;
+}
+
+async function gdriveCreateNewFile(){
+  const createRes = await gdriveApi('files?fields=id,modifiedTime', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ name: GDRIVE_FILENAME })
+  });
+  const created = await createRes.json();
+  gdrive.fileId = created.id;
+  gdrive.lastKnownModifiedTime = created.modifiedTime;
   await idbKvSet('gdrive_file_id', gdrive.fileId);
   await idbKvSet('gdrive_last_modified', gdrive.lastKnownModifiedTime);
+}
+
+/* ---------- Google Picker (lets a second/different Google account pick a file
+   that the first account has shared with them — drive.file scope grants access
+   to whatever gets explicitly picked, even though it wasn't created by this
+   account) ---------- */
+function gdriveLoadPickerApi(){
+  return new Promise((resolve, reject)=>{
+    if (window.gapi && window.gapi.picker){ resolve(); return; }
+    if (window.gapi && window.gapi.load){
+      window.gapi.load('picker', { callback: resolve, onerror: reject });
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://apis.google.com/js/api.js';
+    script.onload = ()=> window.gapi.load('picker', { callback: resolve, onerror: reject });
+    script.onerror = ()=> reject(new Error('โหลด apis.google.com/js/api.js ไม่สำเร็จ'));
+    document.head.appendChild(script);
+  });
+}
+
+async function gdriveOpenPicker(){
+  if (!gdrive.apiKey){ toast('กรอกและบันทึก Google API Key ก่อน (ดูวิธีสร้างในคู่มือ GOOGLE_DRIVE_SYNC_SETUP.md)'); return; }
+  try{
+    await gdriveLoadPickerApi();
+  }catch(e){ toast('โหลด Google Picker ไม่สำเร็จ: '+e.message); return; }
+
+  let token;
+  try{ token = await gdriveEnsureToken(false); }
+  catch(e){ toast('ยังไม่ได้เชื่อมต่อ Google Drive'); return; }
+
+  const view = new google.picker.DocsView(google.picker.ViewId.DOCS)
+    .setIncludeFolders(false)
+    .setQuery(GDRIVE_FILENAME);
+  const builder = new google.picker.PickerBuilder()
+    .addView(view)
+    .setOAuthToken(token)
+    .setDeveloperKey(gdrive.apiKey)
+    .setCallback(gdrivePickerCallback);
+  if (gdrive.projectNumber) builder.setAppId(gdrive.projectNumber);
+  builder.build().setVisible(true);
+}
+
+async function gdrivePickerCallback(data){
+  if (data.action !== google.picker.Action.PICKED) return;
+  const file = data.docs[0];
+  gdrive.fileId = file.id;
+  gdrive.lastKnownModifiedTime = null; // force gdriveCheckAndPull to fetch fresh metadata + download
+  await idbKvSet('gdrive_file_id', gdrive.fileId);
+  await idbKvSet('gdrive_last_modified', null);
+  document.getElementById('gdriveFileChoice').style.display = 'none';
+  gdriveSetStatus(`เลือกไฟล์ "${file.name}" แล้ว — กำลังดาวน์โหลดข้อมูล...`);
+  await gdriveCheckAndPull();
+  if (gdrive.enabled) gdriveStartPolling();
+  toast('เชื่อมโยงไฟล์ที่ถูกแชร์มาสำเร็จ');
 }
 
 async function gdriveUpload(bytes){
@@ -1082,9 +1184,13 @@ function wireGdriveSettings(){
     const v = document.getElementById('gdriveClientId').value.trim();
     if (!v){ toast('กรอก Client ID ก่อน'); return; }
     gdrive.clientId = v;
+    gdrive.apiKey = document.getElementById('gdriveApiKey').value.trim() || null;
+    gdrive.projectNumber = document.getElementById('gdriveProjectNumber').value.trim() || null;
     await idbKvSet('gdrive_client_id', v);
+    await idbKvSet('gdrive_api_key', gdrive.apiKey);
+    await idbKvSet('gdrive_project_number', gdrive.projectNumber);
     gdriveInitTokenClient();
-    toast('บันทึก Client ID แล้ว — กด "เชื่อมต่อ Google Drive" ได้เลย');
+    toast('บันทึกการตั้งค่าแล้ว — กด "เชื่อมต่อ Google Drive" ได้เลย');
   });
   document.getElementById('btnGdriveConnect').addEventListener('click', async ()=>{
     if (!gdrive.clientId){ toast('กรอกและบันทึก Client ID ก่อน'); return; }
@@ -1106,21 +1212,36 @@ function wireGdriveSettings(){
     gdrive.signedInEmail = null;
     document.getElementById('btnGdriveConnect').style.display = '';
     document.getElementById('btnGdriveDisconnect').style.display = 'none';
+    document.getElementById('gdriveFileChoice').style.display = 'none';
     gdriveSetStatus('ยังไม่ได้เชื่อมต่อ');
     toast('ตัดการเชื่อมต่อ Google Drive แล้ว');
   });
   document.getElementById('toggleGdriveSync').addEventListener('change', async (e)=>{
     gdrive.enabled = e.target.checked;
     await idbKvSet('gdrive_sync_enabled', gdrive.enabled);
-    if (gdrive.enabled && gdrive.accessToken) gdriveStartPolling();
+    if (gdrive.enabled && gdrive.accessToken && gdrive.fileId) gdriveStartPolling();
     else gdriveStopPolling();
   });
   document.getElementById('btnGdriveSyncNow').addEventListener('click', async ()=>{
     if (!gdrive.accessToken){ toast('เชื่อมต่อ Google Drive ก่อน'); return; }
+    if (!gdrive.fileId){ toast('ยังไม่ได้เลือก/สร้างไฟล์ฐานข้อมูล — ดูตัวเลือกด้านบนสถานะการเชื่อมต่อ'); return; }
     await gdriveCheckAndPull();
     await gdrivePushIfEnabled();
     toast('ซิงค์ตอนนี้เรียบร้อย');
   });
+  document.getElementById('btnGdriveCreateNew').addEventListener('click', async ()=>{
+    try{
+      await gdriveCreateNewFile();
+      document.getElementById('gdriveFileChoice').style.display = 'none';
+      gdriveSetStatus(`สร้างไฟล์ใหม่แล้ว${gdrive.signedInEmail? ' ('+gdrive.signedInEmail+')':''} — กำลังอัปโหลดข้อมูลปัจจุบัน...`);
+      await gdrivePushIfEnabled();
+      if (gdrive.enabled) gdriveStartPolling();
+      toast('สร้างไฟล์ฐานข้อมูลบน Google Drive แล้ว');
+    }catch(e){
+      toast('สร้างไฟล์ไม่สำเร็จ: ' + e.message);
+    }
+  });
+  document.getElementById('btnGdriveOpenPicker').addEventListener('click', gdriveOpenPicker);
 }
 
 async function boot(){
