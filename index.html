@@ -293,7 +293,10 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
       </div>
 
       <div class="card section-gap">
-        <h3>รายการล่าสุด</h3>
+        <div class="row-flex" style="justify-content:space-between; margin-bottom:2px;">
+          <h3 id="recentTableTitle" style="margin:0;">รายการล่าสุด</h3>
+          <span class="chip" id="chipClearDashFilter" style="display:none;">✕ ล้างตัวกรอง (แสดงทั้งหมด)</span>
+        </div>
         <div class="table-wrap">
           <table class="ledger" id="tblRecent">
             <thead><tr><th>วันที่</th><th>รายการ</th><th>บัญชี</th><th class="num">เดบิต</th><th class="num">เครดิต</th></tr></thead>
@@ -367,7 +370,7 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
         <table class="ledger" id="tblLedger">
           <thead><tr>
             <th>วันที่</th><th>รหัส</th><th>รายละเอียดบัญชี</th><th>ประเภท</th>
-            <th class="num">เดบิต</th><th class="num">เครดิต</th><th class="num" id="thBalance">ยอดคงเหลือ</th><th>บันทึกช่วยจำ</th>
+            <th class="num">เดบิต</th><th class="num">เครดิต</th><th class="num" id="thBalance">ยอดคงเหลือ</th><th>บันทึกช่วยจำ</th><th>จัดการ</th>
           </tr></thead>
           <tbody></tbody>
           <tfoot></tfoot>
@@ -1126,8 +1129,11 @@ async function gdriveGetModifiedTime(){
   return data.modifiedTime;
 }
 
+let gdrivePendingPush = false;
+
 async function gdrivePushIfEnabled(){
-  if (!gdrive.enabled || !gdrive.accessToken || !gdrive.fileId || gdrive.syncing) return;
+  if (!gdrive.enabled || !gdrive.accessToken || !gdrive.fileId) return;
+  if (gdrive.syncing){ gdrivePendingPush = true; return; } // don't drop it — retry once current sync finishes
   gdrive.syncing = true;
   try{
     await gdriveUpload(db.export());
@@ -1137,11 +1143,16 @@ async function gdrivePushIfEnabled(){
     gdriveSetStatus('ซิงค์ไม่สำเร็จ: ' + e.message);
   }finally{
     gdrive.syncing = false;
+    if (gdrivePendingPush){
+      gdrivePendingPush = false;
+      gdrivePushIfEnabled();
+    }
   }
 }
 
 async function gdriveCheckAndPull(){
   if (!gdrive.enabled || !gdrive.accessToken || !gdrive.fileId || gdrive.syncing) return;
+  if (editingLedgerRowId !== null){ return; } // never pull while a row is actively being edited — would clobber unsaved UI state
   gdrive.syncing = true;
   try{
     const remoteModified = await gdriveGetModifiedTime();
@@ -1299,6 +1310,7 @@ function createEmptySchema(){
 }
 
 function loadCaches(){
+  repairNullJournalIds();
   accChartCache = qAll("SELECT code,cdesc,type_acc,use_flag,bank_flag FROM acc_chart ORDER BY code");
   accTypeCache = {};
   qAll("SELECT type_acc,type_desc FROM acc_type").forEach(r => accTypeCache[r.type_acc] = r.type_desc);
@@ -1325,6 +1337,28 @@ function qRun(sql, params){
   if (params) stmt.bind(params);
   stmt.step();
   stmt.free();
+}
+
+/* Some previously-imported databases have a `journal.id` column declared as a
+   plain INTEGER rather than INTEGER PRIMARY KEY (a quirk of how the original
+   Access-to-SQLite conversion was built), so it never auto-fills like a normal
+   rowid would. Any row inserted by the app itself before this fix could end up
+   with id = NULL, which silently breaks editing/deleting that specific row
+   (SQL's `WHERE id = NULL` never matches anything). This repairs any such rows
+   in place, using SQLite's always-present internal `rowid` — which exists
+   regardless of how the visible `id` column was declared — to find and fix
+   them. Runs automatically on every load; it's a no-op once everything is
+   already healthy. */
+function repairNullJournalIds(){
+  const nullCount = qAll("SELECT COUNT(*) c FROM journal WHERE id IS NULL")[0].c;
+  if (!nullCount) return;
+  const nullRows = qAll("SELECT rowid rid FROM journal WHERE id IS NULL ORDER BY rowid");
+  let nextId = qAll("SELECT COALESCE(MAX(id),0) m FROM journal")[0].m;
+  const stmt = db.prepare("UPDATE journal SET id=? WHERE rowid=?");
+  nullRows.forEach(r=>{ nextId++; stmt.run([nextId, r.rid]); });
+  stmt.free();
+  console.warn(`Repaired ${nullRows.length} journal row(s) with a NULL id.`);
+  toast(`ซ่อมแซมข้อมูล: พบและแก้ไข ${nullRows.length} รายการที่มี id ผิดพลาดจากบั๊กก่อนหน้า`);
 }
 function accDesc(code){
   const a = accChartCache.find(c=>c.code===code);
@@ -1382,6 +1416,17 @@ function wireNav(){
   document.getElementById('btnGoImport').addEventListener('click', ()=>{
     document.querySelector('.nav a[data-view="settings"]').click();
     setTimeout(()=>document.getElementById('fileImport').click(), 200);
+  });
+  document.getElementById('dashMonth').addEventListener('change', renderDashboard);
+  document.getElementById('btnRefreshDash').addEventListener('click', ()=>{
+    refreshAll();
+    toast('รีเฟรชข้อมูลแล้ว');
+  });
+  document.getElementById('chipClearDashFilter').addEventListener('click', ()=>{
+    selectedDashCategory = null;
+    updateRecentTableHeading();
+    renderRecentTable(getRecentRows());
+    renderDashboard(); // also clears the highlighted slice on the chart
   });
 }
 
@@ -1480,7 +1525,8 @@ function renderDashboard(){
   document.getElementById('kpiNet').textContent = money(net);
   setDelta('kpiNetDelta', net - (prevIE.inc-prevIE.exp));
 
-  renderRecentTable(qAll(`SELECT * FROM journal ORDER BY j_date DESC, id DESC LIMIT 10`));
+  updateRecentTableHeading();
+  renderRecentTable(getRecentRows());
 
   // 12 month trend ending at ym
   const months = allMonthsAvailable();
@@ -1494,7 +1540,7 @@ function renderDashboard(){
   const categoryBalances = ['1','2','3','4','5'].map(t=>{
     let bal = 0;
     accChartCache.filter(c=>c.type_acc===t).forEach(c=> bal += balanceAsOf(c.code, asOf));
-    return {label: TYPE_NAMES[t], value: Math.abs(bal)};
+    return {label: TYPE_NAMES[t], value: Math.abs(bal), code: t};
   }).filter(g=>g.value>0);
   renderAssetChart(categoryBalances);
 }
@@ -1504,6 +1550,34 @@ function setDelta(id, v){
   const sign = v>0?'+':'';
   el.textContent = `${sign}${money(v)} เทียบเดือนก่อน`;
   el.className = 'delta ' + (v>=0?'up':'down');
+}
+
+let selectedDashCategory = null; // type_acc code, or null for no filter
+
+function getRecentRows(){
+  if (selectedDashCategory){
+    return qAll(`SELECT j.* FROM journal j JOIN acc_chart a ON a.code=j.code
+                 WHERE a.type_acc=? ORDER BY j.j_date DESC, j.id DESC LIMIT 10`, [selectedDashCategory]);
+  }
+  return qAll(`SELECT * FROM journal ORDER BY j_date DESC, id DESC LIMIT 10`);
+}
+
+function selectDashCategory(code){
+  selectedDashCategory = (selectedDashCategory === code) ? null : code; // click again to toggle off
+  updateRecentTableHeading();
+  renderRecentTable(getRecentRows());
+}
+
+function updateRecentTableHeading(){
+  const title = document.getElementById('recentTableTitle');
+  const clearChip = document.getElementById('chipClearDashFilter');
+  if (selectedDashCategory){
+    title.textContent = `รายการล่าสุด — เฉพาะหมวด "${TYPE_NAMES[selectedDashCategory]}"`;
+    clearChip.style.display = 'inline-block';
+  } else {
+    title.textContent = 'รายการล่าสุด';
+    clearChip.style.display = 'none';
+  }
 }
 
 function renderRecentTable(rows){
@@ -1557,13 +1631,36 @@ function renderAssetChart(groups){
     ctx.getContext('2d').clearRect(0,0,ctx.width,ctx.height);
     return;
   }
+  const colors = groups.map((g,i)=>palette[i % palette.length]);
   chartAssets = new Chart(ctx, {
     type:'doughnut',
     data:{
       labels: groups.map(g=>g.label),
-      datasets:[{data:groups.map(g=>g.value), backgroundColor:palette, borderWidth:0}]
+      datasets:[{
+        data: groups.map(g=>g.value),
+        backgroundColor: colors,
+        borderWidth: groups.map(g=> g.code===selectedDashCategory ? 3 : 0),
+        borderColor: ink,
+        hoverOffset: 6
+      }]
     },
-    options:{responsive:true, plugins:{legend:{position:'bottom', labels:{color:ink, boxWidth:12, font:{size:11}}}}}
+    options:{
+      responsive:true,
+      onClick: (evt, elements)=>{
+        if (!elements.length) return;
+        selectDashCategory(groups[elements[0].index].code);
+        renderAssetChart(groups); // re-render to reflect the new highlight
+      },
+      plugins:{
+        legend:{
+          position:'bottom', labels:{color:ink, boxWidth:12, font:{size:11}},
+          onClick: (evt, legendItem)=>{
+            selectDashCategory(groups[legendItem.index].code);
+            renderAssetChart(groups);
+          }
+        }
+      }
+    }
   });
 }
 
@@ -1725,19 +1822,38 @@ function renderLedger(){
   renderLedgerTable(rows, showBalance);
 }
 
+let editingLedgerRowId = null;
+
 function renderLedgerTable(rows, showBalance){
   document.getElementById('thBalance').style.display = showBalance? '':'none';
   const tb = document.querySelector('#tblLedger tbody');
   const tf = document.querySelector('#tblLedger tfoot');
   tf.innerHTML = ''; // summary row now lives at the top of tbody instead of the footer
   if (!rows.length){
-    tb.innerHTML = `<tr class="empty-row"><td colspan="8">ไม่พบรายการที่ตรงกับเงื่อนไข</td></tr>`;
+    tb.innerHTML = `<tr class="empty-row"><td colspan="9">ไม่พบรายการที่ตรงกับเงื่อนไข</td></tr>`;
     return;
   }
+  const acctOpts = accChartCache.map(c=>`<option value="${c.code}">${c.code} — ${escapeHtml(c.cdesc)}</option>`).join('');
   let bal = 0, sumDb=0, sumCr=0;
   const trs = rows.map(r=>{
     if (showBalance) bal += isDebitNormal(r.type_acc) ? (r.db_amt-r.cr_amt) : (r.cr_amt-r.db_amt);
     sumDb += r.db_amt||0; sumCr += r.cr_amt||0;
+    if (r.id === editingLedgerRowId){
+      return `<tr style="background:rgba(168,121,31,.07);">
+        <td><input type="date" id="ledgerEditDate_${r.id}" value="${(r.j_date||'').slice(0,10)}" style="width:132px;"></td>
+        <td colspan="2"><select id="ledgerEditCode_${r.id}" style="width:100%; min-width:220px;">${acctOpts.replace(`value="${r.code}"`, `value="${r.code}" selected`)}</select></td>
+        <td></td>
+        <td class="num"><input type="number" step="0.01" id="ledgerEditDb_${r.id}" value="${r.db_amt||0}" style="width:100px; text-align:right;"></td>
+        <td class="num"><input type="number" step="0.01" id="ledgerEditCr_${r.id}" value="${r.cr_amt||0}" style="width:100px; text-align:right;"></td>
+        <td class="num" style="${showBalance?'':'display:none;'}"></td>
+        <td><input type="text" id="ledgerEditRemark_${r.id}" value="${escapeHtml(r.jremark||'')}" style="width:100%;"></td>
+        <td style="white-space:nowrap;">
+          <button class="pill-btn" style="padding:4px 10px; color:var(--rust); border-color:var(--rust);" id="ledgerDelBtnEdit_${r.id}">ลบ</button>
+          <button class="pill-btn primary" style="padding:4px 10px;" id="ledgerSaveBtn_${r.id}">บันทึก</button>
+          <button class="pill-btn" style="padding:4px 10px;" id="ledgerCancelBtn_${r.id}">ยกเลิก</button>
+        </td>
+      </tr>`;
+    }
     return `<tr>
       <td>${fmtDate(r.j_date)}</td>
       <td>${r.code}</td>
@@ -1747,6 +1863,10 @@ function renderLedgerTable(rows, showBalance){
       <td class="num cr">${r.cr_amt? moneyPlain(r.cr_amt):''}</td>
       <td class="num" style="${showBalance?'':'display:none;'}">${showBalance? moneyPlain(bal):''}</td>
       <td>${escapeHtml(r.jremark||'')}</td>
+      <td style="white-space:nowrap;">
+        <button class="pill-btn" style="padding:4px 10px;" id="ledgerEditBtn_${r.id}">แก้ไข</button>
+        <button class="pill-btn" style="padding:4px 10px; color:var(--rust); border-color:var(--rust);" id="ledgerDelBtn_${r.id}">ลบ</button>
+      </td>
     </tr>`;
   });
   const summaryRow = `<tr style="font-weight:700; background:rgba(168,121,31,.08); border-bottom:2px solid var(--ink);">
@@ -1755,9 +1875,73 @@ function renderLedgerTable(rows, showBalance){
     <td class="num">${moneyPlain(sumCr)}</td>
     <td class="num" style="${showBalance?'':'display:none;'}">${showBalance? moneyPlain(bal):''}</td>
     <td></td>
+    <td></td>
   </tr>`;
   // summary row first, then most recent transaction first below it (running balance still computed chronologically above)
   tb.innerHTML = summaryRow + trs.slice().reverse().join('');
+
+  rows.forEach(r=>{
+    const editBtn = document.getElementById(`ledgerEditBtn_${r.id}`);
+    if (editBtn) editBtn.addEventListener('click', ()=>{
+      editingLedgerRowId = r.id;
+      renderLedgerTable(currentLedgerRows, currentLedgerShowBalance);
+    });
+    const delBtn = document.getElementById(`ledgerDelBtn_${r.id}`);
+    if (delBtn) delBtn.addEventListener('click', ()=> deleteLedgerRow(r.id));
+    const delBtnEdit = document.getElementById(`ledgerDelBtnEdit_${r.id}`);
+    if (delBtnEdit) delBtnEdit.addEventListener('click', ()=> deleteLedgerRow(r.id));
+    const saveBtn = document.getElementById(`ledgerSaveBtn_${r.id}`);
+    if (saveBtn) saveBtn.addEventListener('click', ()=> saveLedgerRowEdit(r.id));
+    const cancelBtn = document.getElementById(`ledgerCancelBtn_${r.id}`);
+    if (cancelBtn) cancelBtn.addEventListener('click', ()=>{
+      editingLedgerRowId = null;
+      renderLedgerTable(currentLedgerRows, currentLedgerShowBalance);
+    });
+  });
+}
+
+function saveLedgerRowEdit(id){
+  const date = document.getElementById(`ledgerEditDate_${id}`).value;
+  const code = document.getElementById(`ledgerEditCode_${id}`).value;
+  const dbAmt = parseFloat(document.getElementById(`ledgerEditDb_${id}`).value) || 0;
+  const crAmt = parseFloat(document.getElementById(`ledgerEditCr_${id}`).value) || 0;
+  const remark = document.getElementById(`ledgerEditRemark_${id}`).value.trim();
+  if (!date){ toast('กรุณาเลือกวันที่'); return; }
+  if (!code){ toast('กรุณาเลือกบัญชี'); return; }
+  try{
+    db.run("UPDATE journal SET code=?, db_amt=?, cr_amt=?, j_date=?, jremark=? WHERE id=?",
+      [code, dbAmt, crAmt, date+' 00:00:00', remark||null, id]);
+    const changed = qAll("SELECT changes() c")[0].c;
+    if (!changed){
+      toast(`ไม่พบรายการ id=${id} ให้แก้ไข (อาจถูกลบ/เปลี่ยนไปแล้วจากอุปกรณ์อื่น) — กำลังโหลดข้อมูลล่าสุด`);
+      editingLedgerRowId = null;
+      refreshAll();
+      renderLedger();
+      return;
+    }
+    editingLedgerRowId = null;
+    refreshAll();
+    renderLedger();
+    toast('บันทึกการแก้ไขแล้ว');
+  }catch(e){
+    toast('บันทึกไม่สำเร็จ: ' + e.message);
+    console.error('saveLedgerRowEdit failed:', e);
+  }
+}
+
+function deleteLedgerRow(id){
+  if (!confirm('ยืนยันลบรายการนี้? การกระทำนี้ย้อนกลับไม่ได้')) return;
+  try{
+    db.run("DELETE FROM journal WHERE id=?", [id]);
+    const changed = qAll("SELECT changes() c")[0].c;
+    if (editingLedgerRowId === id) editingLedgerRowId = null;
+    refreshAll();
+    renderLedger();
+    toast(changed ? 'ลบรายการแล้ว' : `ไม่พบรายการ id=${id} ให้ลบ (อาจถูกลบไปแล้ว) — โหลดข้อมูลล่าสุดให้แล้ว`);
+  }catch(e){
+    toast('ลบไม่สำเร็จ: ' + e.message);
+    console.error('deleteLedgerRow failed:', e);
+  }
 }
 
 /* ================================================================
@@ -1772,11 +1956,11 @@ function populateAccountSelects(){
 
 function insertJournalRow(code, db_amt, cr_amt, jdate, remark, transId){
   const now = new Date().toISOString().replace('T',' ').slice(0,19);
-  const insert = db.prepare(`INSERT INTO journal(trans_id,code,db_amt,cr_amt,j_date,create_date,update_user,jremark) VALUES (?,?,?,?,?,?,?,?)`);
-  insert.run([transId, code, db_amt||0, cr_amt||0, jdate, now, 'web-app', remark||null]);
+  const nextId = qAll("SELECT COALESCE(MAX(id),0)+1 m FROM journal")[0].m;
+  const insert = db.prepare(`INSERT INTO journal(id,trans_id,code,db_amt,cr_amt,j_date,create_date,update_user,jremark) VALUES (?,?,?,?,?,?,?,?,?)`);
+  insert.run([nextId, transId, code, db_amt||0, cr_amt||0, jdate, now, 'web-app', remark||null]);
   insert.free();
-  const id = qAll("SELECT last_insert_rowid() id")[0].id;
-  return id;
+  return nextId;
 }
 function nextTransId(){
   return qAll("SELECT COALESCE(MAX(trans_id),0)+1 m FROM journal")[0].m;
