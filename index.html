@@ -405,7 +405,7 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
         <div class="table-wrap">
           <table class="ledger" id="tblDefaults">
             <thead><tr>
-              <th style="width:34px;"></th>
+              <th style="width:34px;"><input type="checkbox" id="chkDefaultsSelectAll" title="เลือก/ยกเลิกเลือกทั้งหมด"></th>
               <th>บัญชี</th>
               <th class="num">เดบิต</th>
               <th class="num">เครดิต</th>
@@ -2012,6 +2012,10 @@ function wireAddForm(){
   });
   document.getElementById('btnSaveDefaults').addEventListener('click', saveDefaultsToTemplate);
   document.getElementById('btnPostDefaults').addEventListener('click', postDefaults);
+  document.getElementById('chkDefaultsSelectAll').addEventListener('change', (e)=>{
+    pendingDefaults.forEach(r=> r.checked = e.target.checked);
+    renderDefaultsPanel(true);
+  });
 }
 
 function updateAddPreview(){
@@ -2067,6 +2071,7 @@ function renderDefaultsPanel(keepPending){
   if (!pendingDefaults.length){
     tb.innerHTML = `<tr class="empty-row"><td colspan="6">ยังไม่มีค่า Default — กด "+ เพิ่มรายการ Default"</td></tr>`;
     tf.innerHTML = '';
+    updateSelectAllCheckboxState();
     return;
   }
   const acctOpts = accChartCache.map(c=>`<option value="${c.code}">${c.code} — ${escapeHtml(c.cdesc)}</option>`).join('');
@@ -2080,7 +2085,7 @@ function renderDefaultsPanel(keepPending){
       <td><button class="pill-btn" style="padding:4px 10px;" data-i="${i}" id="dfDel${i}">ลบ</button></td>
     </tr>`).join('');
 
-  tb.querySelectorAll('.dfChk').forEach(el=>el.addEventListener('change', e=>{ pendingDefaults[+e.target.dataset.i].checked = e.target.checked; updateDefaultsFooter(); }));
+  tb.querySelectorAll('.dfChk').forEach(el=>el.addEventListener('change', e=>{ pendingDefaults[+e.target.dataset.i].checked = e.target.checked; updateSelectAllCheckboxState(); updateDefaultsFooter(); }));
   tb.querySelectorAll('.dfCode').forEach(el=>el.addEventListener('change', e=>{ pendingDefaults[+e.target.dataset.i].code = e.target.value; }));
   tb.querySelectorAll('.dfDb').forEach(el=>el.addEventListener('input', e=>{ pendingDefaults[+e.target.dataset.i].db_amt = parseFloat(e.target.value)||0; updateDefaultsFooter(); }));
   tb.querySelectorAll('.dfCr').forEach(el=>el.addEventListener('input', e=>{ pendingDefaults[+e.target.dataset.i].cr_amt = parseFloat(e.target.value)||0; updateDefaultsFooter(); }));
@@ -2089,7 +2094,21 @@ function renderDefaultsPanel(keepPending){
     pendingDefaults.splice(+e.target.dataset.i, 1);
     renderDefaultsPanel(true);
   }));
+  updateSelectAllCheckboxState();
   updateDefaultsFooter();
+}
+
+function updateSelectAllCheckboxState(){
+  const selectAll = document.getElementById('chkDefaultsSelectAll');
+  if (!selectAll) return;
+  if (!pendingDefaults.length){
+    selectAll.checked = false;
+    selectAll.indeterminate = false;
+    return;
+  }
+  const checkedCount = pendingDefaults.filter(r=>r.checked).length;
+  selectAll.checked = checkedCount === pendingDefaults.length;
+  selectAll.indeterminate = checkedCount > 0 && checkedCount < pendingDefaults.length;
 }
 
 function updateDefaultsFooter(){
