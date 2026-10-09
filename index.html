@@ -249,6 +249,10 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
         ตั้งค่า
       </a></li>
     </ul>
+    <div id="sidebarSyncBadge" class="row-flex" style="gap:6px; padding:8px 4px; font-size:11.5px; color:#9aa6bd; display:none;">
+      <span id="sidebarSyncDot" style="width:7px; height:7px; border-radius:50%; background:#7c869c; flex:none;"></span>
+      <span id="sidebarSyncText">Google Drive</span>
+    </div>
     <div class="sidebar-foot">
       แปลงจากระบบ Access เดิม<br>
       ข้อมูลทั้งหมดเก็บในเบราว์เซอร์ของคุณเท่านั้น
@@ -891,6 +895,29 @@ const gdrive = {
 function gdriveSetStatus(text){
   const el = document.getElementById('gdriveStatus');
   if (el) el.textContent = text;
+  updateSidebarSyncBadge(text);
+}
+
+function updateSidebarSyncBadge(statusText){
+  const badge = document.getElementById('sidebarSyncBadge');
+  const dot = document.getElementById('sidebarSyncDot');
+  const label = document.getElementById('sidebarSyncText');
+  if (!badge) return;
+  if (!gdrive.enabled || !gdrive.clientId){ badge.style.display = 'none'; return; }
+  badge.style.display = 'flex';
+  if (!gdrive.accessToken || !gdrive.fileId){
+    dot.style.background = '#7c869c';
+    label.textContent = 'Drive: ยังไม่ได้เชื่อมต่อ';
+  } else if (gdrive.syncing || gdriveDirty){
+    dot.style.background = '#d9b25c';
+    label.textContent = 'Drive: กำลังซิงค์...';
+  } else if (statusText && statusText.includes('ไม่สำเร็จ')){
+    dot.style.background = '#e08277';
+    label.textContent = 'Drive: ซิงค์ไม่สำเร็จ';
+  } else {
+    dot.style.background = '#7fc7a1';
+    label.textContent = 'Drive: ซิงค์แล้ว';
+  }
 }
 
 async function gdriveRestoreState(){
@@ -1130,19 +1157,24 @@ async function gdriveGetModifiedTime(){
 }
 
 let gdrivePendingPush = false;
+let gdriveDirty = false; // true = a local change exists that Drive hasn't confirmed yet
 
 async function gdrivePushIfEnabled(){
   if (!gdrive.enabled || !gdrive.accessToken || !gdrive.fileId) return;
+  gdriveDirty = true;
+  updateSidebarSyncBadge();
   if (gdrive.syncing){ gdrivePendingPush = true; return; } // don't drop it — retry once current sync finishes
   gdrive.syncing = true;
   try{
     await gdriveUpload(db.export());
+    gdriveDirty = false;
     gdriveSetStatus(`ซิงค์ล่าสุด: ${new Date().toLocaleTimeString('th-TH')} (อัปโหลด)`);
   }catch(e){
     console.warn('Drive upload failed:', e);
     gdriveSetStatus('ซิงค์ไม่สำเร็จ: ' + e.message);
   }finally{
     gdrive.syncing = false;
+    updateSidebarSyncBadge();
     if (gdrivePendingPush){
       gdrivePendingPush = false;
       gdrivePushIfEnabled();
@@ -1188,6 +1220,38 @@ function gdriveStartPolling(){
 }
 function gdriveStopPolling(){
   if (gdrive.pollHandle){ clearInterval(gdrive.pollHandle); gdrive.pollHandle = null; }
+}
+
+/* Lifecycle handling:
+   - Before the tab closes, warn if a change hasn't finished uploading yet.
+     (Browsers cap "finish after the page closes" requests at ~64KB, far smaller
+     than the database, so a silent background upload during close isn't reliable —
+     the uploads therefore fire immediately after every edit, and this guard just
+     gives the last one a chance to finish.)
+   - When the tab becomes visible again, reconnect silently if needed and pull
+     any newer data straight away instead of waiting for the next poll. */
+function wireSyncLifecycle(){
+  window.addEventListener('beforeunload', (e)=>{
+    if (gdrive.enabled && gdrive.accessToken && gdrive.fileId && (gdriveDirty || gdrive.syncing)){
+      e.preventDefault();
+      e.returnValue = 'ข้อมูลกำลังซิงค์ขึ้น Google Drive — ควรรอสักครู่ก่อนปิด';
+      return e.returnValue;
+    }
+  });
+  document.addEventListener('visibilitychange', async ()=>{
+    if (document.visibilityState !== 'visible') return;
+    if (!gdrive.enabled || !gdrive.clientId) return;
+    if (!gdrive.accessToken){
+      try{
+        await gdriveEnsureToken(false);
+        document.getElementById('btnGdriveConnect').style.display = 'none';
+        document.getElementById('btnGdriveDisconnect').style.display = '';
+        await gdriveAfterConnect();
+      }catch(_){ /* silent retry failed; the manual connect button remains available */ }
+    } else if (gdrive.fileId){
+      gdriveCheckAndPull();
+    }
+  });
 }
 
 function wireGdriveSettings(){
@@ -1279,6 +1343,7 @@ async function boot(){
   wireNav();
   wireSettings();
   wireGdriveSettings();
+  wireSyncLifecycle();
   wireAddForm();
   wireLedgerView();
   wireReports();
