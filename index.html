@@ -947,7 +947,9 @@ const gdrive = {
   enabled: false,
   pollHandle: null,
   applyingRemoteUpdate: false,
-  syncing: false
+  syncing: false,
+  pendingToken: null,
+  connectRequested: false
 };
 
 function gdriveSetStatus(text){
@@ -985,6 +987,7 @@ async function gdriveRestoreState(){
   gdrive.fileId = await idbKvGet('gdrive_file_id', null);
   gdrive.lastKnownModifiedTime = await idbKvGet('gdrive_last_modified', null);
   gdrive.enabled = await idbKvGet('gdrive_sync_enabled', true);
+  gdrive.consentedBefore = !!(await idbKvGet('gdrive_consented', false)) || !!gdrive.fileId;
   if (gdrive.clientId) document.getElementById('gdriveClientId').value = gdrive.clientId;
   if (gdrive.apiKey) document.getElementById('gdriveApiKey').value = gdrive.apiKey;
   if (gdrive.projectNumber) document.getElementById('gdriveProjectNumber').value = gdrive.projectNumber;
@@ -1001,7 +1004,7 @@ async function gdriveRestoreState(){
   }
   gdriveInitTokenClient();
 
-  if (gdrive.enabled){
+  if (gdrive.enabled && gdrive.consentedBefore){
     gdriveSetStatus('กำลังเชื่อมต่อ Google Drive อัตโนมัติ...');
     try{
       await gdriveEnsureToken(false); // silent reconnect using the existing Google session/consent
@@ -1013,7 +1016,7 @@ async function gdriveRestoreState(){
       gdriveSetStatus('ยังไม่ได้เชื่อมต่อ — กด "เชื่อมต่อ Google Drive" เพื่อเข้าสู่ระบบอีกครั้ง');
     }
   } else {
-    gdriveSetStatus('ตั้งค่า Client ID แล้ว — กด "เชื่อมต่อ Google Drive" เพื่อเริ่มซิงค์');
+    gdriveSetStatus('พร้อมเชื่อมต่อ — กดปุ่ม "เชื่อมต่อ Google Drive" แล้วล็อกอินด้วยบัญชี Google (ครั้งแรกครั้งเดียว)');
   }
 }
 
@@ -1025,8 +1028,46 @@ function gdriveInitTokenClient(){
   gdrive.tokenClient = google.accounts.oauth2.initTokenClient({
     client_id: gdrive.clientId,
     scope: GDRIVE_SCOPE,
-    callback: gdriveHandleTokenResponse
+    callback: gdriveDispatchToken,
+    error_callback: gdriveTokenError
   });
+}
+
+/* Every answer from Google goes through ONE dispatcher. Earlier versions swapped the
+   client's callback per request, so a silent startup attempt that Google never answered
+   (popup blocked, no click) left a stale callback behind — and a later Connect click
+   finished into that stale callback and the screen never updated. */
+function gdriveSettlePending(err, token){
+  const p = gdrive.pendingToken; gdrive.pendingToken = null;
+  if (!p) return;
+  clearTimeout(p.timer);
+  if (err) p.reject(err); else p.resolve(token);
+}
+function gdriveDispatchToken(resp){
+  const wantsUi = gdrive.connectRequested; gdrive.connectRequested = false;
+  if (!resp || resp.error){
+    gdriveSettlePending(new Error((resp && resp.error) || 'unknown'));
+    if (wantsUi) gdriveHandleTokenResponse(resp || {error:'unknown'});
+    return;
+  }
+  gdrive.accessToken = resp.access_token;
+  gdrive.tokenExpiresAt = Date.now() + (Number(resp.expires_in)||3500) * 1000;
+  idbKvSet('gdrive_consented', true);
+  gdriveSettlePending(null, gdrive.accessToken);
+  if (wantsUi) gdriveHandleTokenResponse(resp);
+}
+function gdriveTokenError(err){
+  const type = (err && err.type) || 'unknown';
+  gdriveSettlePending(new Error(type));
+  const wantsUi = gdrive.connectRequested; gdrive.connectRequested = false;
+  if (!wantsUi) return; // silent attempts fail quietly
+  const msg = type === 'popup_failed_to_open'
+      ? 'เบราว์เซอร์บล็อกหน้าต่างล็อกอิน Google — กรุณาอนุญาต Pop-up สำหรับเว็บนี้ (ไอคอนที่แถบ URL) แล้วกดเชื่อมต่อใหม่'
+    : type === 'popup_closed'
+      ? 'ปิดหน้าต่างล็อกอิน Google ก่อนเสร็จ — กดเชื่อมต่อใหม่อีกครั้ง'
+      : 'เชื่อมต่อไม่สำเร็จ (' + type + ')';
+  gdriveSetStatus(msg);
+  toast(msg);
 }
 
 function gdriveHandleTokenResponse(resp){
@@ -1040,23 +1081,30 @@ function gdriveHandleTokenResponse(resp){
   document.getElementById('btnGdriveConnect').style.display = 'none';
   document.getElementById('btnGdriveDisconnect').style.display = '';
   gdriveSetStatus('เชื่อมต่อแล้ว — กำลังตรวจสอบไฟล์บน Drive...');
-  gdriveAfterConnect();
+  gdriveAfterConnect().catch(e=>{
+    console.error('gdriveAfterConnect failed:', e);
+    const m = 'เชื่อมต่อ Google แล้ว แต่เข้าถึง Drive ไม่สำเร็จ: ' + e.message + ' (ตรวจว่าเปิดใช้ Google Drive API ในโปรเจกต์ Google Cloud แล้ว)';
+    gdriveSetStatus(m); toast(m);
+  });
 }
 
 async function gdriveEnsureToken(interactive){
   if (!gdrive.tokenClient){ gdriveInitTokenClient(); }
   if (!gdrive.tokenClient) throw new Error('ยังไม่ได้ตั้งค่า Client ID');
   if (gdrive.accessToken && Date.now() < gdrive.tokenExpiresAt - 60000) return gdrive.accessToken;
+  if (gdrive.pendingToken){ // a request is already in flight — wait for it instead of stacking another popup
+    return new Promise((resolve, reject)=>{
+      const prev = gdrive.pendingToken;
+      const res = prev.resolve, rej = prev.reject;
+      prev.resolve = (t)=>{ res(t); resolve(t); };
+      prev.reject = (e)=>{ rej(e); reject(e); };
+    });
+  }
   return new Promise((resolve, reject)=>{
-    const prevCallback = gdrive.tokenClient.callback;
-    gdrive.tokenClient.callback = (resp)=>{
-      gdrive.tokenClient.callback = prevCallback;
-      if (resp.error){ reject(new Error(resp.error)); return; }
-      gdrive.accessToken = resp.access_token;
-      gdrive.tokenExpiresAt = Date.now() + (Number(resp.expires_in)||3500) * 1000;
-      resolve(gdrive.accessToken);
-    };
-    gdrive.tokenClient.requestAccessToken({ prompt: interactive ? 'consent' : '' });
+    const timer = setTimeout(()=>{ gdriveSettlePending(new Error('timeout')); }, interactive ? 120000 : (gdrive.silentTimeoutMs || 10000));
+    gdrive.pendingToken = { resolve, reject, timer };
+    try{ gdrive.tokenClient.requestAccessToken({ prompt: interactive ? 'consent' : '' }); }
+    catch(e){ gdriveSettlePending(e); }
   });
 }
 
@@ -1300,6 +1348,7 @@ function wireSyncLifecycle(){
     if (document.visibilityState !== 'visible') return;
     if (!gdrive.enabled || !gdrive.clientId) return;
     if (!gdrive.accessToken){
+      if (!(gdrive.consentedBefore || gdrive.fileId)) return;
       try{
         await gdriveEnsureToken(false);
         document.getElementById('btnGdriveConnect').style.display = 'none';
@@ -1332,8 +1381,16 @@ function wireGdriveSettings(){
       return;
     }
     if (!gdrive.tokenClient) gdriveInitTokenClient();
-    if (!gdrive.tokenClient) return;
-    gdrive.tokenClient.requestAccessToken({ prompt: 'consent' });
+    if (!gdrive.tokenClient){
+      const m = 'โหลดไลบรารี Google ไม่สำเร็จ (accounts.google.com/gsi/client) — ตรวจสอบอินเทอร์เน็ต/ปิดตัวบล็อกโฆษณา แล้วรีเฟรชหน้านี้';
+      gdriveSetStatus(m); toast(m); return;
+    }
+    gdriveSettlePending(new Error('superseded')); // drop any stale silent attempt
+    gdrive.connectRequested = true;
+    gdriveSetStatus('กำลังเปิดหน้าต่างล็อกอิน Google...');
+    toast('กำลังเปิดหน้าต่างล็อกอิน Google — หากไม่ขึ้น ให้อนุญาต Pop-up');
+    try{ gdrive.tokenClient.requestAccessToken({ prompt: 'consent' }); }
+    catch(e){ gdrive.connectRequested = false; gdriveSetStatus('เปิดหน้าต่างล็อกอินไม่สำเร็จ: ' + e.message); toast('เปิดหน้าต่างล็อกอินไม่สำเร็จ: ' + e.message); }
   });
   document.getElementById('btnGdriveDisconnect').addEventListener('click', ()=>{
     gdriveStopPolling();
