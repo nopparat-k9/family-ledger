@@ -213,6 +213,8 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
 
 
 /* ===== Pastel pink theme overrides ===== */
+.top-scroll{overflow-x:auto; overflow-y:hidden; height:16px; margin-bottom:4px; display:none;}
+.top-scroll > div{height:1px;}
 .sidebar{background:linear-gradient(180deg,#ffd9e8 0%,#fbc3da 100%); color:var(--ink);}
 [data-theme="dark"] .sidebar{background:linear-gradient(180deg,#4a2a3c 0%,#3a2232 100%);}
 .stamp{border-color:#e0689a; color:#d4538a;}
@@ -428,7 +430,8 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
         </div>
       </div>
 
-      <div class="table-wrap">
+      <div class="top-scroll" id="ledgerTopScroll" title="เลื่อนซ้าย-ขวา"><div id="ledgerTopScrollInner"></div></div>
+      <div class="table-wrap" id="ledgerTableWrap">
         <table class="ledger" id="tblLedger">
           <thead><tr>
             <th>วันที่</th><th>รหัส</th><th>รายละเอียดบัญชี</th><th>ประเภท</th>
@@ -1951,6 +1954,7 @@ function populateLedgerSelects(){
 }
 
 function wireLedgerView(){
+  wireLedgerTopScroll();
   document.getElementById('selItem').addEventListener('change', renderLedger);
   document.getElementById('btnApplyFilters').addEventListener('click', renderLedger);
   document.getElementById('btnClearFilters').addEventListener('click', ()=>{
@@ -2063,7 +2067,32 @@ function renderLedger(){
 
 let editingLedgerRowId = null;
 
+/* Horizontal scrollbar mirrored above the results table, kept in sync with the real one */
+function syncLedgerTopScroll(){
+  const top = document.getElementById('ledgerTopScroll');
+  const inner = document.getElementById('ledgerTopScrollInner');
+  const wrap = document.getElementById('ledgerTableWrap');
+  const table = document.getElementById('tblLedger');
+  if (!top || !inner || !wrap || !table) return;
+  inner.style.width = table.scrollWidth + 'px';
+  top.style.display = (table.scrollWidth > wrap.clientWidth + 1) ? 'block' : 'none';
+  if (top.scrollLeft !== wrap.scrollLeft) top.scrollLeft = wrap.scrollLeft;
+}
+function wireLedgerTopScroll(){
+  const top = document.getElementById('ledgerTopScroll');
+  const wrap = document.getElementById('ledgerTableWrap');
+  if (!top || !wrap) return;
+  top.addEventListener('scroll', ()=>{ if (wrap.scrollLeft !== top.scrollLeft) wrap.scrollLeft = top.scrollLeft; });
+  wrap.addEventListener('scroll', ()=>{ if (top.scrollLeft !== wrap.scrollLeft) top.scrollLeft = wrap.scrollLeft; });
+  window.addEventListener('resize', syncLedgerTopScroll);
+}
+
 function renderLedgerTable(rows, showBalance){
+  renderLedgerTableInner(rows, showBalance);
+  syncLedgerTopScroll();
+}
+
+function renderLedgerTableInner(rows, showBalance){
   document.getElementById('thBalance').style.display = showBalance? '':'none';
   const tb = document.querySelector('#tblLedger tbody');
   const tf = document.querySelector('#tblLedger tfoot');
@@ -2454,12 +2483,14 @@ function parseAmountFromSpeech(text){
    ================================================================ */
 function populateReportMonths(){
   const sel = document.getElementById('repMonth');
-  const months = allMonthsAvailable();
+  const months = allMonthsAvailable().slice().reverse(); // newest month first
+  const cur = sel.value;
   sel.innerHTML = months.map(m=>`<option value="${m}">${thaiMonthLabel(m)}</option>`).join('');
-  if (months.length) sel.value = months[months.length-1];
+  if (months.length) sel.value = months.includes(cur) ? cur : months[0];
   const asOf = document.getElementById('repAsOf');
   if (!asOf.value) asOf.value = new Date().toISOString().slice(0,10);
 }
+
 
 function ensurePdfFonts(doc){
   // jsPDF's font VFS is per-document-instance, so each new doc needs the font registered.
@@ -2794,6 +2825,7 @@ function exportLedgerPdf(){
     if (showBalance) bal += isDebitNormal(r.type_acc) ? (r.db_amt-r.cr_amt):(r.cr_amt-r.db_amt);
     return [fmtDate(r.j_date), r.code, r.cdesc, r.db_amt? moneyPlain(r.db_amt):'', r.cr_amt? moneyPlain(r.cr_amt):'', showBalance? moneyPlain(bal):'', r.jremark||''];
   });
+  body.reverse(); // newest date first (running balance above was computed oldest → newest, so each row's balance stays correct)
   const sumDb = currentLedgerRows.reduce((s,r)=>s+(r.db_amt||0),0);
   const sumCr = currentLedgerRows.reduce((s,r)=>s+(r.cr_amt||0),0);
   const head = showBalance? [['วันที่','รหัส','บัญชี','เดบิต','เครดิต','คงเหลือ','บันทึกช่วยจำ']] : [['วันที่','รหัส','บัญชี','เดบิต','เครดิต','','บันทึกช่วยจำ']];
