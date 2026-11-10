@@ -702,6 +702,12 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
             <button class="pill-btn brass" id="btnGdriveConnect">เชื่อมต่อ Google Drive</button>
             <button class="pill-btn" id="btnGdriveDisconnect" style="display:none;">ตัดการเชื่อมต่อ</button>
           </div>
+          <div class="data-note" style="margin-bottom:12px;">
+            <b>ถ้าหน้าต่างล็อกอินถูกปิดเอง / ล็อกอินแล้วสถานะไม่ขยับ</b> ให้ใช้ทางเลือกนี้: ไปหน้า Google เต็มหน้าแล้วกลับมาที่แอป (ไม่ใช้ป๊อปอัป)<br>
+            <button class="pill-btn" id="btnGdriveConnectRedirect" style="margin-top:8px;">เชื่อมต่อแบบเปิดหน้า Google (ไม่ใช้ป๊อปอัป)</button>
+            <div class="small-muted" style="margin-top:8px;">ต้องเพิ่มลิงก์นี้ใน Google Cloud → Google Auth Platform → Clients → (client ของคุณ) → <b>Authorized redirect URIs</b> ก่อน 1 ครั้ง แล้วกด Save:<br>
+            <code id="gdriveRedirectUri" style="user-select:all; word-break:break-all;"></code></div>
+          </div>
           <div id="gdriveStatus" class="small-muted" style="margin-bottom:10px;">ยังไม่ได้เชื่อมต่อ</div>
 
           <div id="gdriveFileChoice" style="display:none; margin-bottom:14px; padding:14px; border:1px dashed var(--brass); border-radius:8px; background:var(--brass-soft);">
@@ -949,7 +955,8 @@ const gdrive = {
   applyingRemoteUpdate: false,
   syncing: false,
   pendingToken: null,
-  connectRequested: false
+  connectRequested: false,
+  navigate: (u)=>{ location.assign(u); }
 };
 
 function gdriveSetStatus(text){
@@ -1004,7 +1011,7 @@ async function gdriveRestoreState(){
   }
   gdriveInitTokenClient();
 
-  if (gdrive.enabled && gdrive.consentedBefore){
+  if (gdrive.enabled && gdrive.consentedBefore && !gdriveRedirectResult){
     gdriveSetStatus('กำลังเชื่อมต่อ Google Drive อัตโนมัติ...');
     try{
       await gdriveEnsureToken(false); // silent reconnect using the existing Google session/consent
@@ -1064,7 +1071,7 @@ function gdriveTokenError(err){
   const msg = type === 'popup_failed_to_open'
       ? 'เบราว์เซอร์บล็อกหน้าต่างล็อกอิน Google — กรุณาอนุญาต Pop-up สำหรับเว็บนี้ (ไอคอนที่แถบ URL) แล้วกดเชื่อมต่อใหม่'
     : type === 'popup_closed'
-      ? 'ปิดหน้าต่างล็อกอิน Google ก่อนเสร็จ — กดเชื่อมต่อใหม่อีกครั้ง'
+      ? 'ปิดหน้าต่างล็อกอิน Google ก่อนเสร็จ — ถ้าเกิดซ้ำ ให้กดปุ่ม "เชื่อมต่อแบบเปิดหน้า Google (ไม่ใช้ป๊อปอัป)" ด้านล่าง'
       : 'เชื่อมต่อไม่สำเร็จ (' + type + ')';
   gdriveSetStatus(msg);
   toast(msg);
@@ -1089,9 +1096,10 @@ function gdriveHandleTokenResponse(resp){
 }
 
 async function gdriveEnsureToken(interactive){
-  if (!gdrive.tokenClient){ gdriveInitTokenClient(); }
-  if (!gdrive.tokenClient) throw new Error('ยังไม่ได้ตั้งค่า Client ID');
+  // A still-valid token is usable even when the Google library is blocked (e.g. after the redirect sign-in)
   if (gdrive.accessToken && Date.now() < gdrive.tokenExpiresAt - 60000) return gdrive.accessToken;
+  if (!gdrive.tokenClient){ gdriveInitTokenClient(); }
+  if (!gdrive.tokenClient) throw new Error('โทเคนหมดอายุหรือยังไม่ได้เชื่อมต่อ — กดเชื่อมต่อใหม่ (ถ้าหน้าต่างล็อกอินใช้ไม่ได้ ให้ใช้ปุ่มเชื่อมต่อแบบเปิดหน้า Google)');
   if (gdrive.pendingToken){ // a request is already in flight — wait for it instead of stacking another popup
     return new Promise((resolve, reject)=>{
       const prev = gdrive.pendingToken;
@@ -1432,9 +1440,59 @@ function wireGdriveSettings(){
     }
   });
   document.getElementById('btnGdriveOpenPicker').addEventListener('click', gdriveOpenPicker);
+  document.getElementById('btnGdriveConnectRedirect').addEventListener('click', gdriveStartRedirectLogin);
+  document.getElementById('gdriveRedirectUri').textContent = gdriveRedirectUri();
+}
+
+/* ---------- Redirect (no-popup) sign-in ----------
+   Full-page OAuth round trip: no popup, no postMessage, no third-party cookies, so it
+   works where the popup flow gets closed or blocked. Requires the exact page URL to be
+   registered under "Authorized redirect URIs" on the OAuth client. */
+function gdriveRedirectUri(){
+  return location.origin + location.pathname.replace(/index\.html$/, '');
+}
+let gdriveRedirectResult = null;
+function gdriveParseRedirectResult(){
+  const hash = location.hash && location.hash.length > 1 ? location.hash.slice(1) : '';
+  const query = location.search && location.search.length > 1 ? location.search.slice(1) : '';
+  const src = /(^|&)(access_token|error)=/.test(hash) ? hash : (/(^|&)error=/.test(query) ? query : '');
+  if (!src) return;
+  const p = new URLSearchParams(src);
+  gdriveRedirectResult = { state:p.get('state'), access_token:p.get('access_token'), expires_in:p.get('expires_in'), error:p.get('error') };
+  try{ history.replaceState(null, '', location.pathname); }catch(_){ /* non-fatal */ }
+}
+async function gdriveStartRedirectLogin(){
+  if (!gdrive.clientId){ toast('กรอกและบันทึก Client ID ก่อน'); return; }
+  if (location.protocol === 'file:'){ toast('ต้องเปิดแอปผ่านลิงก์ https:// ไม่ใช่ไฟล์ในเครื่อง'); return; }
+  const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  await idbKvSet('gdrive_oauth_state', state);
+  const params = new URLSearchParams({
+    client_id: gdrive.clientId, redirect_uri: gdriveRedirectUri(), response_type: 'token',
+    scope: GDRIVE_SCOPE, state, prompt: 'select_account', include_granted_scopes: 'true'
+  });
+  gdriveSetStatus('กำลังไปหน้าล็อกอิน Google...');
+  gdrive.navigate('https://accounts.google.com/o/oauth2/v2/auth?' + params.toString());
+}
+async function gdriveFinishRedirectLogin(){
+  const r = gdriveRedirectResult; if (!r) return;
+  gdriveRedirectResult = null;
+  const saved = await idbKvGet('gdrive_oauth_state', null);
+  await idbKvSet('gdrive_oauth_state', null);
+  const settingsLink = document.querySelector('.nav a[data-view="settings"]');
+  if (settingsLink) settingsLink.click(); // show the result where the status line is
+  const fail = (m)=>{ gdriveSetStatus(m); toast(m); };
+  if (!saved || r.state !== saved){ fail('ผลการล็อกอินไม่ตรงกับคำขอ (state ไม่ตรง) — กดเชื่อมต่อใหม่อีกครั้ง'); return; }
+  if (r.error || !r.access_token){
+    fail(r.error === 'access_denied' ? 'ยกเลิก/ปฏิเสธการเชื่อมต่อ (access_denied) — ถ้าอยู่โหมด Testing ตรวจว่าอีเมลอยู่ใน Test users'
+                                      : 'เชื่อมต่อไม่สำเร็จ (' + (r.error || 'ไม่ได้รับ token') + ')');
+    return;
+  }
+  await idbKvSet('gdrive_consented', true);
+  gdriveHandleTokenResponse({ access_token: r.access_token, expires_in: r.expires_in });
 }
 
 async function boot(){
+  gdriveParseRedirectResult();
   SQL = await initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.5.0/${f}` });
 
   const savedBytes = await idbLoadDb();
@@ -1465,6 +1523,7 @@ async function boot(){
   wireGroupsView();
   await restorePrefs();
   await gdriveRestoreState();
+  await gdriveFinishRedirectLogin();
   refreshAll();
   if (restoredFromBrowser) toast('โหลดข้อมูลบัญชีที่บันทึกไว้ในเบราว์เซอร์นี้อัตโนมัติ');
 }
