@@ -261,7 +261,7 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
       </a></li>
       <li><a data-view="reports">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M9 13h6M9 17h6M9 9h2"/></svg>
-        รายงาน PDF
+        รายงาน
       </a></li>
       <li><a data-view="groups">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="8" cy="17" r="3"/><circle cx="17" cy="17" r="3"/></svg>
@@ -377,7 +377,14 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
           <h2>ค้นหา &amp; บัญชีแยกประเภท</h2>
           <div class="sub">ค้นหาอัจฉริยะ พร้อมยอดยกไป (running balance) แบบเดียวกับระบบเดิม</div>
         </div>
-        <button class="pill-btn brass" id="btnExportLedgerPdf">ส่งออก PDF</button>
+        <div class="row-flex" style="gap:8px;">
+          <select id="ledgerExportFormat" class="pill-btn" style="appearance:auto;" title="รูปแบบไฟล์ที่จะบันทึก">
+              <option value="pdf">PDF (.pdf)</option>
+              <option value="xlsx">Excel (.xlsx)</option>
+              <option value="csv">สเปรดชีต (.csv)</option>
+          </select>
+          <button class="pill-btn brass" id="btnExportLedgerPdf">ส่งออกไฟล์</button>
+        </div>
       </div>
 
       <div class="card" id="ledgerFilterCard" style="margin-bottom:16px;">
@@ -552,8 +559,16 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
     <section class="view" id="view-reports">
       <div class="topbar">
         <div>
-          <h2>รายงาน PDF</h2>
-          <div class="sub">สร้างรายงานสรุปและส่งออกเป็นไฟล์ PDF พร้อมฟอนต์ภาษาไทย</div>
+          <h2>รายงาน</h2>
+          <div class="sub">สร้างรายงานสรุป แล้วบันทึกเป็น PDF, Excel หรือสเปรดชีต (CSV)</div>
+        </div>
+        <div class="row-flex" style="gap:8px;">
+          <label class="small-muted" for="repExportFormat">บันทึกเป็น</label>
+          <select id="repExportFormat" class="pill-btn" style="appearance:auto;" title="รูปแบบไฟล์ที่จะบันทึก">
+              <option value="pdf">PDF (.pdf)</option>
+              <option value="xlsx">Excel (.xlsx)</option>
+              <option value="csv">สเปรดชีต (.csv)</option>
+          </select>
         </div>
       </div>
 
@@ -565,7 +580,7 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
             <label>เลือกเดือน</label>
             <select id="repMonth"></select>
           </div>
-          <button class="pill-btn primary" id="btnRepMonthly">สร้าง PDF สรุปรายเดือน</button>
+          <button class="pill-btn primary" id="btnRepMonthly">บันทึกรายงานสรุปรายเดือน</button>
         </div>
         <div class="card">
           <h3>งบดุลโดยสรุป (Balance Snapshot)</h3>
@@ -574,13 +589,13 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
             <label>ณ วันที่</label>
             <input type="date" id="repAsOf">
           </div>
-          <button class="pill-btn primary" id="btnRepBalance">สร้าง PDF งบดุล</button>
+          <button class="pill-btn primary" id="btnRepBalance">บันทึกรายงานงบดุล</button>
         </div>
       </div>
 
       <div class="card section-gap">
         <h3>รายงานตามช่วงเวลาที่กำหนดเอง</h3>
-        <p class="small-muted">ใช้ตัวกรองที่หน้า "ค้นหา &amp; บัญชีแยกประเภท" แล้วกดปุ่ม "ส่งออก PDF" ที่มุมขวาบนของหน้านั้น</p>
+        <p class="small-muted">ใช้ตัวกรองที่หน้า "ค้นหา &amp; บัญชีแยกประเภท" แล้วเลือกรูปแบบไฟล์ + กดปุ่ม "ส่งออกไฟล์" ที่มุมขวาบนของหน้านั้น</p>
         <button class="pill-btn" id="btnGoLedger">ไปที่หน้าค้นหา</button>
       </div>
     </section>
@@ -1525,6 +1540,7 @@ async function boot(){
   wireReports();
   wireGroupsView();
   await restorePrefs();
+  await restoreExportFormat();
   await gdriveRestoreState();
   await gdriveFinishRedirectLogin();
   refreshAll();
@@ -1976,7 +1992,7 @@ function wireLedgerView(){
       renderLedger();
     });
   });
-  document.getElementById('btnExportLedgerPdf').addEventListener('click', exportLedgerPdf);
+  document.getElementById('btnExportLedgerPdf').addEventListener('click', exportLedger);
 }
 
 function applyQuickChip(key){
@@ -2529,8 +2545,9 @@ function pdfFooterAndSave(doc, filename){
 }
 
 function wireReports(){
-  document.getElementById('btnRepMonthly').addEventListener('click', generateMonthlyPdf);
-  document.getElementById('btnRepBalance').addEventListener('click', generateBalancePdf);
+  document.getElementById('btnRepMonthly').addEventListener('click', generateMonthlyReport);
+  document.getElementById('btnRepBalance').addEventListener('click', generateBalanceReport);
+  wireExportFormat();
 }
 
 /* ================================================================
@@ -2686,22 +2703,171 @@ function renderGroupsView(){
     : `<option value="">— ทุกบัญชีอยู่ในกลุ่มนี้แล้ว —</option>`;
 }
 
-function generateMonthlyPdf(){
-  const ym = document.getElementById('repMonth').value;
-  if (!ym){ toast('ไม่มีข้อมูลให้สร้างรายงาน'); return; }
-  const doc = newPdf();
-  pdfHeader(doc, `สรุปรายรับ–รายจ่ายรายเดือน`, `เดือน ${thaiMonthLabel(ym)}`);
-  const from = ym+'-01', to=ym+'-31 23:59:59';
-  const extraPlaceholders = EXTRA_INCOME_CODES.map(()=>'?').join(',');
 
+
+/* ================================================================
+   EXPORT: PDF / Excel (.xlsx) / สเปรดชีต (.csv)
+   The .xlsx file is written by hand (a stored ZIP of XML parts) so the app needs no
+   extra library. Dates are real Excel dates; amounts are real numbers.
+   ================================================================ */
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const cS = (v, bold)=>({t:'s', v:(v==null?'':String(v)), st: bold?1:0});
+const cH = (v)=>({t:'s', v:String(v), st:5});
+const cN = (v, bold)=>({t:'n', v:Math.round(Number(v)*100)/100, st: bold?4:2});
+const cD = (iso)=>({t:'d', v:iso, st:3});
+
+function xmlEsc(s){
+  return String(s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,'')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function colLetter(i){ let s=''; i++; while(i>0){ const m=(i-1)%26; s=String.fromCharCode(65+m)+s; i=Math.floor((i-1)/26); } return s; }
+function excelDateSerial(iso){ const p=iso.slice(0,10).split('-').map(Number); return Math.round(Date.UTC(p[0],p[1]-1,p[2])/86400000)+25569; }
+
+function sheetXml(rows, opts){
+  opts = opts || {};
+  let x = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">';
+  if (opts.freezeHeader) x += '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>';
+  if (opts.widths && opts.widths.length) x += '<cols>' + opts.widths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('') + '</cols>';
+  x += '<sheetData>';
+  rows.forEach((r,ri)=>{
+    if (!r || !r.length) return; // blank spacer row (row numbers stay aligned via ri)
+    x += `<row r="${ri+1}">`;
+    r.forEach((c,ci)=>{
+      if (!c || (c.t==='s' && c.v==='')) return;
+      const ref = colLetter(ci)+(ri+1);
+      if (c.t==='n'){ if (isFinite(c.v)) x += `<c r="${ref}" s="${c.st}"><v>${c.v}</v></c>`; }
+      else if (c.t==='d') x += `<c r="${ref}" s="${c.st}"><v>${excelDateSerial(c.v)}</v></c>`;
+      else x += `<c r="${ref}" t="inlineStr" s="${c.st}"><is><t xml:space="preserve">${xmlEsc(c.v)}</t></is></c>`;
+    });
+    x += '</row>';
+  });
+  return x + '</sheetData></worksheet>';
+}
+
+let _crcTable = null;
+function crc32(bytes){
+  if (!_crcTable){
+    _crcTable = new Uint32Array(256);
+    for (let n=0;n<256;n++){ let c=n; for (let k=0;k<8;k++) c = (c&1) ? (0xEDB88320 ^ (c>>>1)) : (c>>>1); _crcTable[n]=c>>>0; }
+  }
+  let crc = 0xFFFFFFFF;
+  for (let i=0;i<bytes.length;i++) crc = _crcTable[(crc ^ bytes[i]) & 0xFF] ^ (crc>>>8);
+  return (crc ^ 0xFFFFFFFF)>>>0;
+}
+function zipStore(files){ // files: [{name, bytes}] — "stored" (uncompressed) ZIP
+  const enc = new TextEncoder();
+  const u16 = (n)=>[n&255,(n>>>8)&255];
+  const u32 = (n)=>[n&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255];
+  const parts = [], central = []; let offset = 0;
+  files.forEach(f=>{
+    const name = enc.encode(f.name), crc = crc32(f.bytes), size = f.bytes.length;
+    const local = [0x50,0x4b,0x03,0x04, ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(size), ...u32(size), ...u16(name.length), ...u16(0)];
+    parts.push(new Uint8Array(local), name, f.bytes);
+    const cen = [0x50,0x4b,0x01,0x02, ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(size), ...u32(size), ...u16(name.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(offset)];
+    central.push(new Uint8Array(cen), name);
+    offset += local.length + name.length + size;
+  });
+  let cdSize = 0; central.forEach(p=>{ cdSize += p.length; });
+  const end = new Uint8Array([0x50,0x4b,0x05,0x06, ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(cdSize), ...u32(offset), ...u16(0)]);
+  const all = parts.concat(central, [end]);
+  let total = 0; all.forEach(p=>{ total += p.length; });
+  const out = new Uint8Array(total); let pos = 0;
+  all.forEach(p=>{ out.set(p,pos); pos += p.length; });
+  return out;
+}
+
+function xlsxBuild(sheetName, rows, opts){
+  const enc = new TextEncoder();
+  const name = String(sheetName||'Sheet1').replace(/[\[\]:*?\/\\]/g,'_').slice(0,31) || 'Sheet1';
+  const H = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+  const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  const parts = [
+    ['[Content_Types].xml', H+'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'],
+    ['_rels/.rels', H+`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>`],
+    ['xl/workbook.xml', H+`<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${REL}"><sheets><sheet name="${xmlEsc(name)}" sheetId="1" r:id="rId1"/></sheets></workbook>`],
+    ['xl/_rels/workbook.xml.rels', H+`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${REL}/styles" Target="styles.xml"/></Relationships>`],
+    ['xl/styles.xml', H+'<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy\\-mm\\-dd"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFCD9E6"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="6"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="4" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="4" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'],
+    ['xl/worksheets/sheet1.xml', sheetXml(rows, opts)]
+  ];
+  return zipStore(parts.map(p=>({name:p[0], bytes: enc.encode(p[1])})));
+}
+
+function csvCell(c){
+  const v = c==null ? '' : (c.t==='n' ? Number(c.v).toFixed(2) : String(c.v));
+  return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g,'""') + '"' : v;
+}
+function csvBuild(rows){ return rows.map(r=>(r||[]).map(csvCell).join(',')).join('\r\n') + '\r\n'; }
+
+function saveSheetFile(fmt, baseName, sheetName, rows, opts){
+  const safe = String(baseName).replace(/[\\/:*?"<>|]/g,'_');
+  if (fmt === 'xlsx') downloadBlob(new Blob([xlsxBuild(sheetName, rows, opts)], {type: XLSX_MIME}), safe+'.xlsx');
+  else downloadBlob(new Blob(['\uFEFF'+csvBuild(rows)], {type:'text/csv;charset=utf-8'}), safe+'.csv');
+  toast(`บันทึกไฟล์ ${safe}.${fmt==='xlsx'?'xlsx':'csv'} แล้ว`);
+}
+
+/* ---------- ledger (search page) ---------- */
+function buildLedgerExportData(){
+  const showBalance = currentLedgerShowBalance;
+  let bal = 0, sumDb = 0, sumCr = 0;
+  const rows = currentLedgerRows.map(r=>{
+    if (showBalance) bal += isDebitNormal(r.type_acc) ? (r.db_amt-r.cr_amt) : (r.cr_amt-r.db_amt);
+    sumDb += r.db_amt||0; sumCr += r.cr_amt||0;
+    return { iso:(r.j_date||'').slice(0,10), code:r.code, desc:r.cdesc, type:TYPE_NAMES[r.type_acc]||'',
+             db:r.db_amt||0, cr:r.cr_amt||0, bal: showBalance ? bal : null, remark:r.jremark||'' };
+  }).reverse(); // newest date first, same as the screen and the PDF
+  return { showBalance, rows, sumDb, sumCr, finalBal: bal };
+}
+function ledgerSheetRows(d){
+  const head = ['วันที่','รหัส','บัญชี','ประเภท','เดบิต','เครดิต'].concat(d.showBalance ? ['คงเหลือ'] : [], ['บันทึกช่วยจำ']).map(cH);
+  const rows = [head];
+  d.rows.forEach(r=>{
+    const line = [cD(r.iso), cS(r.code), cS(r.desc), cS(r.type), r.db ? cN(r.db) : null, r.cr ? cN(r.cr) : null];
+    if (d.showBalance) line.push(cN(r.bal));
+    line.push(cS(r.remark));
+    rows.push(line);
+  });
+  return rows;
+}
+function exportLedgerSheet(fmt){
+  if (!currentLedgerRows.length){ toast('ไม่มีข้อมูลให้ส่งออก'); return; }
+  const d = buildLedgerExportData();
+  const rows = ledgerSheetRows(d);
+  if (fmt === 'xlsx'){ // totals row only in Excel; the CSV stays pure data so it can be re-imported
+    const total = [cS('รวม '+d.rows.length+' รายการ', true), null, null, null, cN(d.sumDb,true), cN(d.sumCr,true)];
+    if (d.showBalance) total.push(cN(d.finalBal,true));
+    rows.push(total);
+  }
+  saveSheetFile(fmt, `บัญชีแยกประเภท-${currentLedgerTitle}`, 'บัญชีแยกประเภท', rows,
+    { freezeHeader:true, widths: d.showBalance ? [12,8,36,12,14,14,16,40] : [12,8,36,12,14,14,40] });
+}
+function exportLedger(){
+  const fmt = document.getElementById('ledgerExportFormat').value;
+  if (fmt === 'pdf') exportLedgerPdf(); else exportLedgerSheet(fmt);
+}
+
+/* ---------- reports page ---------- */
+function reportSheetRows(data){
+  const rows = [[cS(data.title,true)], [cS(data.subtitle)], []];
+  data.sections.forEach(sec=>{
+    rows.push([cH(sec.label), cH(data.valueHead)]);
+    sec.rows.forEach(r=>rows.push([cS(r.desc), cN(r.v)]));
+    rows.push([cS(sec.totalLabel,true), cN(sec.total,true)]);
+    rows.push([]);
+  });
+  data.lines.forEach(t=>rows.push([cS(t)]));
+  return rows;
+}
+
+function buildMonthlyReportData(ym){
+  const from = ym+'-01', to = ym+'-31 23:59:59';
+  const extraPlaceholders = EXTRA_INCOME_CODES.map(()=>'?').join(',');
   const incomeRows = qAll(`SELECT a.cdesc, SUM(j.cr_amt-j.db_amt) v FROM journal j JOIN acc_chart a ON a.code=j.code
     WHERE (a.type_acc='4' OR a.code IN (${extraPlaceholders})) AND j.j_date BETWEEN ? AND ? GROUP BY a.code HAVING v!=0 ORDER BY v DESC`,
     [...EXTRA_INCOME_CODES, from, to]);
   const expenseRows = qAll(`SELECT a.cdesc, SUM(j.db_amt-j.cr_amt) v FROM journal j JOIN acc_chart a ON a.code=j.code
     WHERE a.type_acc='5' AND j.j_date BETWEEN ? AND ? GROUP BY a.code HAVING v!=0 ORDER BY v DESC`, [from,to]);
   // "รายการอื่นๆ" = ทุกบัญชีที่เหลือซึ่งไม่ได้นับเป็นรายได้/รายจ่ายข้างต้น (เช่น เงินฝากออมทรัพย์, หุ้นสหกรณ์ ฯลฯ)
-  // เพราะระบบนี้บันทึกแบบยอดรวมแต่ละบัญชีต่อเดือนโดยยอด debit รวม = credit รวมเสมอ
-  // ดังนั้น รายรับ = รายจ่าย + รายการอื่นๆ (รายการอื่นๆ คือส่วนที่ถูกเก็บ/ออมไว้ ไม่ได้ถูกจ่ายออกเป็นค่าใช้จ่าย)
+  // ยอด debit รวม = credit รวมเสมอ ดังนั้น รายรับ = รายจ่าย + รายการอื่นๆ
   const otherRows = qAll(`SELECT a.cdesc, SUM(CASE WHEN a.type_acc IN ('1','5') THEN j.db_amt-j.cr_amt ELSE j.cr_amt-j.db_amt END) v
     FROM journal j JOIN acc_chart a ON a.code=j.code
     WHERE a.type_acc NOT IN ('4','5') AND a.code NOT IN (${extraPlaceholders}) AND j.j_date BETWEEN ? AND ?
@@ -2709,107 +2875,148 @@ function generateMonthlyPdf(){
   const totInc = incomeRows.reduce((s,r)=>s+r.v,0);
   const totExp = expenseRows.reduce((s,r)=>s+r.v,0);
   const totOther = otherRows.reduce((s,r)=>s+r.v,0);
-
-  doc.autoTable({
-    startY: 100,
-    head:[['รายได้', 'จำนวนเงิน (บาท)']],
-    body: incomeRows.map(r=>[r.cdesc, moneyPlain(r.v)]),
-    foot:[['รวมรายได้', moneyPlain(totInc)]],
-    styles:{font:'Sarabun', fontSize:9.5, cellPadding:5},
-    headStyles:{fillColor:[60,122,90], textColor:255, font:'Sarabun'},
-    footStyles:{fillColor:[220,235,225], textColor:20, font:'Sarabun'},
-    columnStyles:{1:{halign:'right'}},
-    margin:{left:40,right:40}
-  });
-  doc.autoTable({
-    startY: doc.lastAutoTable.finalY + 22,
-    head:[['ค่าใช้จ่าย', 'จำนวนเงิน (บาท)']],
-    body: expenseRows.map(r=>[r.cdesc, moneyPlain(r.v)]),
-    foot:[['รวมค่าใช้จ่าย', moneyPlain(totExp)]],
-    styles:{font:'Sarabun', fontSize:9.5, cellPadding:5},
-    headStyles:{fillColor:[166,59,50], textColor:255, font:'Sarabun'},
-    footStyles:{fillColor:[243,221,216], textColor:20, font:'Sarabun'},
-    columnStyles:{1:{halign:'right'}},
-    margin:{left:40,right:40}
-  });
-  doc.autoTable({
-    startY: doc.lastAutoTable.finalY + 22,
-    head:[['รายการอื่นๆ (เงินออม/เงินสะสม)', 'จำนวนเงิน (บาท)']],
-    body: otherRows.map(r=>[r.cdesc, moneyPlain(r.v)]),
-    foot:[['รวมรายการอื่นๆ', moneyPlain(totOther)]],
-    styles:{font:'Sarabun', fontSize:9.5, cellPadding:5},
-    headStyles:{fillColor:[168,121,31], textColor:255, font:'Sarabun'},
-    footStyles:{fillColor:[231,211,164], textColor:20, font:'Sarabun'},
-    columnStyles:{1:{halign:'right'}},
-    margin:{left:40,right:40}
-  });
-  const y = doc.lastAutoTable.finalY + 26;
-  doc.setFont('Sarabun','bold'); doc.setFontSize(12);
-  doc.text(`กระแสเงินสดสุทธิเดือนนี้: ${moneyPlain(totInc-totExp)} บาท`, 40, y);
-  doc.setFont('Sarabun','normal'); doc.setFontSize(9.5); doc.setTextColor(90);
-  doc.text(`ตรวจสอบยอด: รายรับ (${moneyPlain(totInc)}) = รายจ่าย (${moneyPlain(totExp)}) + รายการอื่นๆ (${moneyPlain(totOther)}) = ${moneyPlain(totExp+totOther)}`, 40, y+16);
-  doc.setTextColor(20);
-  pdfFooterAndSave(doc, `สรุปรายเดือน-${ym}.pdf`);
+  const m = moneyPlain;
+  const toRows = (rs)=>rs.map(r=>({desc:r.cdesc, v:r.v}));
+  return {
+    title: 'สรุปรายรับ–รายจ่ายรายเดือน', subtitle: `เดือน ${thaiMonthLabel(ym)}`, fileBase: `สรุปรายเดือน-${ym}`, valueHead: 'จำนวนเงิน (บาท)',
+    sections: [
+      { label:'รายได้', rows:toRows(incomeRows), totalLabel:'รวมรายได้', total:totInc, head:[60,122,90], foot:[220,235,225] },
+      { label:'ค่าใช้จ่าย', rows:toRows(expenseRows), totalLabel:'รวมค่าใช้จ่าย', total:totExp, head:[166,59,50], foot:[243,221,216] },
+      { label:'รายการอื่นๆ (เงินออม/เงินสะสม)', rows:toRows(otherRows), totalLabel:'รวมรายการอื่นๆ', total:totOther, head:[168,121,31], foot:[231,211,164] }
+    ],
+    lines: [
+      `กระแสเงินสดสุทธิเดือนนี้: ${m(totInc-totExp)} บาท`,
+      `ตรวจสอบยอด: รายรับ (${m(totInc)}) = รายจ่าย (${m(totExp)}) + รายการอื่นๆ (${m(totOther)}) = ${m(totExp+totOther)}`
+    ]
+  };
 }
-
-function generateBalancePdf(){
-  const asOf = document.getElementById('repAsOf').value;
-  if (!asOf){ toast('กรุณาเลือกวันที่'); return; }
-  const asOfEnd = asOf+' 23:59:59';
+function renderMonthlyPdf(data){
   const doc = newPdf();
-  pdfHeader(doc, 'งบดุลโดยสรุป (Balance Snapshot)', `ณ วันที่ ${new Date(asOf).toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})}`);
-
-  function section(doc, startY, type_acc, label, color){
-    const codes = accChartCache.filter(c=>c.type_acc===type_acc && c.use_flag);
-    const rows = codes.map(c=>({desc:c.cdesc, bal:balanceAsOf(c.code, asOfEnd)})).filter(r=>r.bal!==0);
-    const total = rows.reduce((s,r)=>s+r.bal,0);
+  pdfHeader(doc, data.title, data.subtitle);
+  data.sections.forEach((sec,i)=>{
     doc.autoTable({
-      startY,
-      head:[[label, 'ยอดคงเหลือ (บาท)']],
-      body: rows.map(r=>[r.desc, moneyPlain(r.bal)]),
-      foot:[[`รวม${label}`, moneyPlain(total)]],
+      startY: i===0 ? 100 : doc.lastAutoTable.finalY + 22,
+      head:[[sec.label, data.valueHead]],
+      body: sec.rows.map(r=>[r.desc, moneyPlain(r.v)]),
+      foot:[[sec.totalLabel, moneyPlain(sec.total)]],
       styles:{font:'Sarabun', fontSize:9.5, cellPadding:5},
-      headStyles:{fillColor:color, textColor:255, font:'Sarabun'},
-      footStyles:{fillColor:[240,240,235], textColor:20, font:'Sarabun'},
+      headStyles:{fillColor:sec.head, textColor:255, font:'Sarabun'},
+      footStyles:{fillColor:sec.foot, textColor:20, font:'Sarabun'},
       columnStyles:{1:{halign:'right'}},
       margin:{left:40,right:40}
     });
-    return {finalY: doc.lastAutoTable.finalY, total};
-  }
-  let y = 100;
-  const a = section(doc, y, '1','สินทรัพย์',[60,122,90]);
-  const l = section(doc, a.finalY+22, '2','หนี้สิน',[166,59,50]);
-  const e = section(doc, l.finalY+22, '3','ส่วนทุน',[168,121,31]);
-  const inc = section(doc, e.finalY+22, '4','รายได้สะสม (ตั้งแต่เริ่มบันทึกบัญชี)',[60,122,90]);
-  const exp = section(doc, inc.finalY+22, '5','ค่าใช้จ่ายสะสม (ตั้งแต่เริ่มบันทึกบัญชี)',[166,59,50]);
+  });
+  const y = doc.lastAutoTable.finalY + 26;
+  doc.setFont('Sarabun','bold'); doc.setFontSize(12);
+  doc.text(data.lines[0], 40, y);
+  doc.setFont('Sarabun','normal'); doc.setFontSize(9.5); doc.setTextColor(90);
+  doc.text(data.lines[1], 40, y+16);
+  doc.setTextColor(20);
+  pdfFooterAndSave(doc, data.fileBase+'.pdf');
+}
+function generateMonthlyPdf(){
+  const ym = document.getElementById('repMonth').value;
+  if (!ym){ toast('ไม่มีข้อมูลให้สร้างรายงาน'); return; }
+  renderMonthlyPdf(buildMonthlyReportData(ym));
+}
+function generateMonthlyReport(){
+  const ym = document.getElementById('repMonth').value;
+  if (!ym){ toast('ไม่มีข้อมูลให้สร้างรายงาน'); return; }
+  const fmt = document.getElementById('repExportFormat').value;
+  const data = buildMonthlyReportData(ym);
+  if (fmt === 'pdf') renderMonthlyPdf(data);
+  else saveSheetFile(fmt, data.fileBase, 'สรุปรายเดือน', reportSheetRows(data), { widths:[52,20] });
+}
 
-  const netIncome = inc.total - exp.total;
-  const rhs = l.total + e.total + netIncome;
-
-  let py = exp.finalY + 26;
+function buildBalanceReportData(asOf){
+  const asOfEnd = asOf+' 23:59:59';
+  const defs = [['1','สินทรัพย์',[60,122,90]], ['2','หนี้สิน',[166,59,50]], ['3','ส่วนทุน',[168,121,31]],
+                ['4','รายได้สะสม (ตั้งแต่เริ่มบันทึกบัญชี)',[60,122,90]], ['5','ค่าใช้จ่ายสะสม (ตั้งแต่เริ่มบันทึกบัญชี)',[166,59,50]]];
+  const sections = defs.map(d=>{
+    const rows = accChartCache.filter(c=>c.type_acc===d[0] && c.use_flag)
+      .map(c=>({desc:c.cdesc, v:balanceAsOf(c.code, asOfEnd)})).filter(r=>r.v!==0);
+    return { label:d[1], rows, totalLabel:`รวม${d[1]}`, total: rows.reduce((s,r)=>s+r.v,0), head:d[2], foot:[240,240,235] };
+  });
+  const a = sections[0].total, l = sections[1].total, e = sections[2].total, inc = sections[3].total, exp = sections[4].total;
+  const netIncome = inc - exp, rhs = l + e + netIncome, diff = a - rhs, ok = Math.abs(diff) < 1, m = moneyPlain;
+  const eq = {
+    title: 'สมการบัญชี: สินทรัพย์ = หนี้สิน + ทุน + (รายได้ - ค่าใช้จ่าย)',
+    l1: `สินทรัพย์ ${m(a)} บาท  =  หนี้สิน ${m(l)} + ทุน ${m(e)} + (รายได้ ${m(inc)} - ค่าใช้จ่าย ${m(exp)})`,
+    l2: `  =  หนี้สิน ${m(l)} + ทุน ${m(e)} + รายได้สุทธิสะสม (${netIncome>=0?'':'-'}${m(Math.abs(netIncome))})`,
+    l3: `รวมด้านขวา (หนี้สิน+ทุน+รายได้สุทธิ) = ${m(rhs)} บาท`,
+    check: ok ? `✓ ตรวจสอบสมการ: สินทรัพย์ = ด้านขวา (ผลต่าง ${m(diff)} บาท)` : `⚠ สมการไม่สมดุล: สินทรัพย์ - ด้านขวา = ${m(diff)} บาท`
+  };
+  return {
+    title: 'งบดุลโดยสรุป (Balance Snapshot)',
+    subtitle: `ณ วันที่ ${new Date(asOf).toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})}`,
+    fileBase: `งบดุล-${asOf}`, valueHead: 'ยอดคงเหลือ (บาท)', sections, ok, eq,
+    lines: [eq.title, eq.l1, eq.l2, eq.l3, eq.check]
+  };
+}
+function renderBalancePdf(data){
+  const doc = newPdf();
+  pdfHeader(doc, data.title, data.subtitle);
+  data.sections.forEach((sec,i)=>{
+    doc.autoTable({
+      startY: i===0 ? 100 : doc.lastAutoTable.finalY + 22,
+      head:[[sec.label, data.valueHead]],
+      body: sec.rows.map(r=>[r.desc, moneyPlain(r.v)]),
+      foot:[[sec.totalLabel, moneyPlain(sec.total)]],
+      styles:{font:'Sarabun', fontSize:9.5, cellPadding:5},
+      headStyles:{fillColor:sec.head, textColor:255, font:'Sarabun'},
+      footStyles:{fillColor:sec.foot, textColor:20, font:'Sarabun'},
+      columnStyles:{1:{halign:'right'}},
+      margin:{left:40,right:40}
+    });
+  });
+  let py = doc.lastAutoTable.finalY + 26;
   if (py > 700){ doc.addPage(); py = 50; }
   doc.setFont('Sarabun','bold'); doc.setFontSize(12);
-  doc.text('สมการบัญชี: สินทรัพย์ = หนี้สิน + ทุน + (รายได้ - ค่าใช้จ่าย)', 40, py);
+  doc.text(data.eq.title, 40, py);
   py += 18;
   doc.setFont('Sarabun','normal'); doc.setFontSize(10);
-  doc.text(`สินทรัพย์ ${moneyPlain(a.total)} บาท  =  หนี้สิน ${moneyPlain(l.total)} + ทุน ${moneyPlain(e.total)} + (รายได้ ${moneyPlain(inc.total)} - ค่าใช้จ่าย ${moneyPlain(exp.total)})`, 40, py, {maxWidth: 515});
+  doc.text(data.eq.l1, 40, py, {maxWidth: 515});
   py += 16;
-  doc.text(`  =  หนี้สิน ${moneyPlain(l.total)} + ทุน ${moneyPlain(e.total)} + รายได้สุทธิสะสม (${netIncome>=0?'':'-'}${moneyPlain(Math.abs(netIncome))})`, 40, py, {maxWidth: 515});
+  doc.text(data.eq.l2, 40, py, {maxWidth: 515});
   py += 20;
   doc.setFont('Sarabun','bold');
-  doc.text(`รวมด้านขวา (หนี้สิน+ทุน+รายได้สุทธิ) = ${moneyPlain(rhs)} บาท`, 40, py);
+  doc.text(data.eq.l3, 40, py);
   py += 16;
-  const diff = a.total - rhs;
-  doc.setFont('Sarabun', Math.abs(diff) < 1 ? 'normal' : 'bold');
-  if (Math.abs(diff) < 1){
-    doc.setTextColor(60,122,90);
-    doc.text(`✓ ตรวจสอบสมการ: สินทรัพย์ = ด้านขวา (ผลต่าง ${moneyPlain(diff)} บาท)`, 40, py);
-  } else {
-    doc.setTextColor(166,59,50);
-    doc.text(`⚠ สมการไม่สมดุล: สินทรัพย์ - ด้านขวา = ${moneyPlain(diff)} บาท`, 40, py);
-  }
+  doc.setFont('Sarabun', data.ok ? 'normal' : 'bold');
+  if (data.ok) doc.setTextColor(60,122,90); else doc.setTextColor(166,59,50);
+  doc.text(data.eq.check, 40, py);
   doc.setTextColor(20);
-  pdfFooterAndSave(doc, `งบดุล-${asOf}.pdf`);
+  pdfFooterAndSave(doc, data.fileBase+'.pdf');
+}
+function generateBalancePdf(){
+  const asOf = document.getElementById('repAsOf').value;
+  if (!asOf){ toast('กรุณาเลือกวันที่'); return; }
+  renderBalancePdf(buildBalanceReportData(asOf));
+}
+function generateBalanceReport(){
+  const asOf = document.getElementById('repAsOf').value;
+  if (!asOf){ toast('กรุณาเลือกวันที่'); return; }
+  const fmt = document.getElementById('repExportFormat').value;
+  const data = buildBalanceReportData(asOf);
+  if (fmt === 'pdf') renderBalancePdf(data);
+  else saveSheetFile(fmt, data.fileBase, 'งบดุล', reportSheetRows(data), { widths:[52,20] });
+}
+
+/* ---------- remembered format choice (shared by both pages) ---------- */
+const EXPORT_FORMAT_IDS = ['ledgerExportFormat','repExportFormat'];
+function wireExportFormat(){
+  EXPORT_FORMAT_IDS.forEach(id=>{
+    const el = document.getElementById(id); if (!el) return;
+    el.addEventListener('change', ()=>{
+      EXPORT_FORMAT_IDS.forEach(o=>{ const e2 = document.getElementById(o); if (e2 && e2 !== el) e2.value = el.value; });
+      idbKvSet('export_format', el.value);
+    });
+  });
+}
+async function restoreExportFormat(){
+  let f = await idbKvGet('export_format', 'pdf');
+  if (['pdf','xlsx','csv'].indexOf(f) < 0) f = 'pdf';
+  EXPORT_FORMAT_IDS.forEach(id=>{ const el = document.getElementById(id); if (el) el.value = f; });
 }
 
 function exportLedgerPdf(){
