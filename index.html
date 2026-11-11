@@ -213,6 +213,11 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
 
 
 /* ===== Pastel pink theme overrides ===== */
+.notes-table input[type=text], .notes-table textarea{width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:8px; background:var(--paper-raised); color:var(--ink); font-family:inherit; font-size:13.5px;}
+.notes-table textarea{resize:vertical; min-height:44px;}
+.note-row.dirty{background:rgba(236,127,169,.12);}
+.note-row.flash{animation:noteflash 1.8s ease-out;}
+@keyframes noteflash{0%{background:rgba(236,127,169,.45);} 100%{background:transparent;}}
 .top-scroll{overflow-x:auto; overflow-y:hidden; height:16px; margin-bottom:4px; display:none;}
 .top-scroll > div{height:1px;}
 .sidebar{background:linear-gradient(180deg,#ffd9e8 0%,#fbc3da 100%); color:var(--ink);}
@@ -266,6 +271,10 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
       <li><a data-view="groups">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="8" cy="17" r="3"/><circle cx="17" cy="17" r="3"/></svg>
         จัดการ Query Group
+      </a></li>
+      <li><a data-view="notes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h12v18H6z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>
+        บันทึกช่วยจำบัญชี
       </a></li>
       <li><a data-view="settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.7 1.7 0 00-1.87-.34 1.7 1.7 0 00-1 1.55V21a2 2 0 11-4 0v-.09a1.7 1.7 0 00-1-1.55 1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.7 1.7 0 00.34-1.87 1.7 1.7 0 00-1.55-1H3a2 2 0 110-4h.09a1.7 1.7 0 001.55-1 1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06a1.7 1.7 0 001.87.34H9a1.7 1.7 0 001-1.55V3a2 2 0 114 0v.09a1.7 1.7 0 001 1.55 1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06a1.7 1.7 0 00-.34 1.87V9a1.7 1.7 0 001.55 1H21a2 2 0 110 4h-.09a1.7 1.7 0 00-1.55 1z"/></svg>
@@ -437,6 +446,7 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
         </div>
       </div>
 
+      <div id="ledgerNoteBanner" class="data-note" style="display:none;"></div>
       <div class="top-scroll" id="ledgerTopScroll" title="เลื่อนซ้าย-ขวา"><div id="ledgerTopScrollInner"></div></div>
       <div class="table-wrap" id="ledgerTableWrap">
         <table class="ledger" id="tblLedger">
@@ -650,6 +660,41 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
             </div>
           </div>
         </div>
+      </div>
+    </section>
+
+    <!-- ===================== ACCOUNT NOTES ===================== -->
+    <section class="view" id="view-notes">
+      <div class="topbar">
+        <div>
+          <h2>บันทึกช่วยจำบัญชี</h2>
+          <div class="sub">จดไว้ว่าเงินแต่ละบัญชีเก็บที่ไหน เช่น ธนาคาร/เลขบัญชี, สกุลเงิน, กองทุน — ไม่กระทบตัวเลขในบัญชี</div>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom:16px;">
+        <div class="toolbar" style="margin:0;">
+          <input type="text" id="noteSearch" placeholder="ค้นหา รหัส / ชื่อบัญชี / ข้อความบันทึก" style="flex:1; min-width:220px; padding:9px 12px; border:1px solid var(--line); border-radius:8px; background:var(--paper-raised); color:var(--ink); font-family:inherit;">
+          <select id="noteTypeFilter" class="pill-btn" style="appearance:auto;">
+            <option value="all">ทุกหมวด</option>
+            <option value="1" selected>สินทรัพย์</option>
+            <option value="2">หนี้สิน</option>
+            <option value="3">ส่วนทุน</option>
+            <option value="4">รายได้</option>
+            <option value="5">ค่าใช้จ่าย</option>
+          </select>
+          <label class="small-muted" style="display:flex; gap:6px; align-items:center;"><input type="checkbox" id="noteOnlyMissing"> เฉพาะที่ยังไม่มีบันทึก</label>
+          <label class="small-muted" style="display:flex; gap:6px; align-items:center;"><input type="checkbox" id="noteIncludeInactive"> รวมบัญชีที่ปิดใช้งาน</label>
+        </div>
+        <div class="small-muted" id="noteSummary" style="margin-top:8px;"></div>
+      </div>
+      <div class="table-wrap">
+        <table class="ledger notes-table" id="tblNotes">
+          <thead><tr>
+            <th>รหัส</th><th>ชื่อบัญชี</th><th>ประเภท</th><th class="num">ยอดคงเหลือ</th>
+            <th style="min-width:220px;">เก็บที่ (ธนาคาร / สกุลเงิน / กองทุน)</th><th style="min-width:240px;">บันทึกเพิ่มเติม</th><th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
       </div>
     </section>
 
@@ -1539,6 +1584,7 @@ async function boot(){
   wireLedgerView();
   wireReports();
   wireGroupsView();
+  wireNotesView();
   await restorePrefs();
   await restoreExportFormat();
   await gdriveRestoreState();
@@ -1567,8 +1613,30 @@ function createEmptySchema(){
   loadCaches();
 }
 
+/* Per-account memo ("where is this money kept"). Lives in the same SQLite file, so it is
+   saved, exported and synced to Google Drive together with everything else. The table is
+   created on demand, which keeps databases made before this feature working. */
+let accNoteCache = {};
+function ensureNoteTable(){
+  db.run("CREATE TABLE IF NOT EXISTS acc_note(code TEXT PRIMARY KEY, place TEXT, memo TEXT, updated_at TEXT)");
+}
+function loadNotes(){
+  accNoteCache = {};
+  qAll("SELECT code,place,memo,updated_at FROM acc_note").forEach(r=>{ accNoteCache[r.code] = r; });
+}
+function saveAccNote(code, place, memo){
+  place = String(place||'').trim().slice(0,200);
+  memo = String(memo||'').trim().slice(0,2000);
+  if (!place && !memo) db.run("DELETE FROM acc_note WHERE code=?", [code]);
+  else db.run("INSERT OR REPLACE INTO acc_note(code,place,memo,updated_at) VALUES (?,?,?,?)",
+              [code, place, memo, new Date().toISOString().replace('T',' ').slice(0,19)]);
+  refreshAll(); // reloads caches, auto-saves to this browser and syncs to Drive
+}
+
 function loadCaches(){
   repairNullJournalIds();
+  ensureNoteTable();
+  loadNotes();
   accChartCache = qAll("SELECT code,cdesc,type_acc,use_flag,bank_flag FROM acc_chart ORDER BY code");
   accTypeCache = {};
   qAll("SELECT type_acc,type_desc FROM acc_type").forEach(r => accTypeCache[r.type_acc] = r.type_desc);
@@ -1666,6 +1734,7 @@ function wireNav(){
       if (a.dataset.view==='add') populateAccountSelects();
       if (a.dataset.view==='reports') populateReportMonths();
       if (a.dataset.view==='groups') renderGroupsView();
+      if (a.dataset.view==='notes') renderNotesView();
     });
   });
   document.getElementById('btnGoLedger').addEventListener('click', ()=>{
@@ -2106,6 +2175,7 @@ function wireLedgerTopScroll(){
 function renderLedgerTable(rows, showBalance){
   renderLedgerTableInner(rows, showBalance);
   syncLedgerTopScroll();
+  updateLedgerNoteBanner();
 }
 
 function renderLedgerTableInner(rows, showBalance){
@@ -2551,6 +2621,111 @@ function wireReports(){
 }
 
 /* ================================================================
+   ACCOUNT NOTES PAGE
+   ================================================================ */
+let noteDrafts = {}; // unsaved edits survive filtering/searching until saved
+
+function renderNotesView(focusCode){
+  const tb = document.querySelector('#tblNotes tbody');
+  if (!tb) return;
+  const q = (document.getElementById('noteSearch').value||'').trim().toLowerCase();
+  const t = document.getElementById('noteTypeFilter').value;
+  const onlyMissing = document.getElementById('noteOnlyMissing').checked;
+  const includeInactive = document.getElementById('noteIncludeInactive').checked;
+  const rows = accChartCache.filter(c=>{
+    if (!includeInactive && !c.use_flag) return false;
+    if (t !== 'all' && c.type_acc !== t) return false;
+    const n = accNoteCache[c.code];
+    if (onlyMissing && n) return false;
+    if (q){
+      const hay = (c.code+' '+c.cdesc+' '+(n ? (n.place||'')+' '+(n.memo||'') : '')).toLowerCase();
+      if (hay.indexOf(q) < 0) return false;
+    }
+    return true;
+  });
+  tb.innerHTML = rows.length ? rows.map(c=>{
+    const n = accNoteCache[c.code];
+    const dr = noteDrafts[c.code];
+    const place = dr ? dr.place : (n ? n.place : '');
+    const memo = dr ? dr.memo : (n ? n.memo : '');
+    const bal = balanceAsOf(c.code, '9999-12-31 23:59:59');
+    return `<tr class="note-row${dr?' dirty':''}" data-code="${escapeHtml(c.code)}">
+      <td>${escapeHtml(c.code)}</td>
+      <td>${escapeHtml(c.cdesc)}${c.use_flag ? '' : ' <span class="small-muted">(ปิดใช้งาน)</span>'}</td>
+      <td><span class="badge ${TYPE_BADGE[c.type_acc]}">${TYPE_NAMES[c.type_acc]}</span></td>
+      <td class="num">${moneyPlain(bal)}</td>
+      <td><input type="text" class="noteInPlace" maxlength="200" value="${escapeHtml(place||'')}" placeholder="เช่น ttb 12540 / ธนาคารกรุงไทย / USD เก็บที่บ้าน"></td>
+      <td><textarea class="noteInMemo" rows="2" maxlength="2000" placeholder="รายละเอียดเพิ่มเติม (ไม่บังคับ)">${escapeHtml(memo||'')}</textarea></td>
+      <td><button class="pill-btn primary noteSaveBtn" ${dr?'':'disabled'}>บันทึก</button></td>
+    </tr>`;
+  }).join('') : `<tr class="empty-row"><td colspan="7">ไม่พบบัญชีที่ตรงกับเงื่อนไข</td></tr>`;
+  const withNote = rows.filter(c=>accNoteCache[c.code]).length;
+  document.getElementById('noteSummary').textContent = `แสดง ${rows.length} บัญชี • มีบันทึกแล้ว ${withNote} บัญชี`;
+  if (focusCode){
+    const tr = tb.querySelector(`tr[data-code="${focusCode}"]`);
+    if (tr){
+      tr.classList.add('flash');
+      if (tr.scrollIntoView) tr.scrollIntoView({block:'center'});
+      const inp = tr.querySelector('.noteInPlace'); if (inp) inp.focus();
+    }
+  }
+}
+
+function wireNotesView(){
+  const tb = document.querySelector('#tblNotes tbody');
+  ['noteSearch','noteTypeFilter','noteOnlyMissing','noteIncludeInactive'].forEach(id=>{
+    document.getElementById(id).addEventListener(id==='noteSearch'?'input':'change', ()=>renderNotesView());
+  });
+  tb.addEventListener('input', (e)=>{
+    const tr = e.target.closest('tr[data-code]'); if (!tr) return;
+    noteDrafts[tr.dataset.code] = { place: tr.querySelector('.noteInPlace').value, memo: tr.querySelector('.noteInMemo').value };
+    tr.classList.add('dirty');
+    tr.querySelector('.noteSaveBtn').disabled = false;
+  });
+  tb.addEventListener('click', (e)=>{
+    const btn = e.target.closest('.noteSaveBtn'); if (!btn) return;
+    const tr = btn.closest('tr[data-code]'); const code = tr.dataset.code;
+    saveAccNote(code, tr.querySelector('.noteInPlace').value, tr.querySelector('.noteInMemo').value);
+    delete noteDrafts[code];
+    tr.classList.remove('dirty'); btn.disabled = true;
+    const n = accNoteCache[code];
+    tr.querySelector('.noteInPlace').value = n ? n.place : '';
+    tr.querySelector('.noteInMemo').value = n ? n.memo : '';
+    const withNote = Array.from(tb.querySelectorAll('tr[data-code]')).filter(r=>accNoteCache[r.dataset.code]).length;
+    document.getElementById('noteSummary').textContent = `แสดง ${tb.querySelectorAll('tr[data-code]').length} บัญชี • มีบันทึกแล้ว ${withNote} บัญชี`;
+    updateLedgerNoteBanner();
+    toast(n ? `บันทึกช่วยจำบัญชี ${code} แล้ว` : `ลบบันทึกของบัญชี ${code} แล้ว`);
+  });
+}
+
+function openNotesFor(code){
+  const link = document.querySelector('.nav a[data-view="notes"]'); if (link) link.click();
+  document.getElementById('noteSearch').value = code;
+  document.getElementById('noteTypeFilter').value = 'all';
+  document.getElementById('noteOnlyMissing').checked = false;
+  document.getElementById('noteIncludeInactive').checked = true;
+  renderNotesView(code);
+}
+
+/* The memo is shown on the search page whenever one account is selected. */
+function updateLedgerNoteBanner(){
+  const el = document.getElementById('ledgerNoteBanner'); if (!el) return;
+  const code = document.getElementById('selItem').value;
+  if (!code){ el.style.display = 'none'; el.innerHTML = ''; return; }
+  const n = accNoteCache[code];
+  el.style.display = 'block';
+  const head = `<b>บันทึกช่วยจำ — ${escapeHtml(code)} ${escapeHtml(accDesc(code))}</b><br>`;
+  if (n && (n.place || n.memo)){
+    el.innerHTML = head + `<b>เก็บที่:</b> ${escapeHtml(n.place||'—')}` +
+      (n.memo ? `<div style="white-space:pre-wrap; margin-top:4px;">${escapeHtml(n.memo)}</div>` : '') +
+      ` <button class="pill-btn" id="btnNoteEditFromLedger" style="padding:3px 10px; margin-top:6px;">แก้ไขบันทึก</button>`;
+  } else {
+    el.innerHTML = head + `ยังไม่มีบันทึกสำหรับบัญชีนี้ <button class="pill-btn" id="btnNoteEditFromLedger" style="padding:3px 10px;">เพิ่มบันทึก</button>`;
+  }
+  document.getElementById('btnNoteEditFromLedger').addEventListener('click', ()=>openNotesFor(code));
+}
+
+/* ================================================================
    QUERY GROUP MANAGEMENT (q_grp / qmapa_code CRUD)
    ================================================================ */
 let selectedGrpForEdit = null;
@@ -2847,11 +3022,12 @@ function exportLedger(){
 
 /* ---------- reports page ---------- */
 function reportSheetRows(data){
+  const withPlace = !!data.placeHead;
   const rows = [[cS(data.title,true)], [cS(data.subtitle)], []];
   data.sections.forEach(sec=>{
-    rows.push([cH(sec.label), cH(data.valueHead)]);
-    sec.rows.forEach(r=>rows.push([cS(r.desc), cN(r.v)]));
-    rows.push([cS(sec.totalLabel,true), cN(sec.total,true)]);
+    rows.push(withPlace ? [cH(sec.label), cH(data.placeHead), cH(data.valueHead)] : [cH(sec.label), cH(data.valueHead)]);
+    sec.rows.forEach(r=>rows.push(withPlace ? [cS(r.desc), r.place ? cS(r.place) : null, cN(r.v)] : [cS(r.desc), cN(r.v)]));
+    rows.push(withPlace ? [cS(sec.totalLabel,true), null, cN(sec.total,true)] : [cS(sec.totalLabel,true), cN(sec.total,true)]);
     rows.push([]);
   });
   data.lines.forEach(t=>rows.push([cS(t)]));
@@ -2934,7 +3110,7 @@ function buildBalanceReportData(asOf){
                 ['4','รายได้สะสม (ตั้งแต่เริ่มบันทึกบัญชี)',[60,122,90]], ['5','ค่าใช้จ่ายสะสม (ตั้งแต่เริ่มบันทึกบัญชี)',[166,59,50]]];
   const sections = defs.map(d=>{
     const rows = accChartCache.filter(c=>c.type_acc===d[0] && c.use_flag)
-      .map(c=>({desc:c.cdesc, v:balanceAsOf(c.code, asOfEnd)})).filter(r=>r.v!==0);
+      .map(c=>({desc:c.cdesc, v:balanceAsOf(c.code, asOfEnd), place:(accNoteCache[c.code] && accNoteCache[c.code].place) || ''})).filter(r=>r.v!==0);
     return { label:d[1], rows, totalLabel:`รวม${d[1]}`, total: rows.reduce((s,r)=>s+r.v,0), head:d[2], foot:[240,240,235] };
   });
   const a = sections[0].total, l = sections[1].total, e = sections[2].total, inc = sections[3].total, exp = sections[4].total;
@@ -2949,7 +3125,7 @@ function buildBalanceReportData(asOf){
   return {
     title: 'งบดุลโดยสรุป (Balance Snapshot)',
     subtitle: `ณ วันที่ ${new Date(asOf).toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'})}`,
-    fileBase: `งบดุล-${asOf}`, valueHead: 'ยอดคงเหลือ (บาท)', sections, ok, eq,
+    fileBase: `งบดุล-${asOf}`, valueHead: 'ยอดคงเหลือ (บาท)', placeHead: 'เก็บที่', sections, ok, eq,
     lines: [eq.title, eq.l1, eq.l2, eq.l3, eq.check]
   };
 }
@@ -2959,13 +3135,13 @@ function renderBalancePdf(data){
   data.sections.forEach((sec,i)=>{
     doc.autoTable({
       startY: i===0 ? 100 : doc.lastAutoTable.finalY + 22,
-      head:[[sec.label, data.valueHead]],
-      body: sec.rows.map(r=>[r.desc, moneyPlain(r.v)]),
-      foot:[[sec.totalLabel, moneyPlain(sec.total)]],
+      head:[[sec.label, data.placeHead, data.valueHead]],
+      body: sec.rows.map(r=>[r.desc, r.place||'', moneyPlain(r.v)]),
+      foot:[[sec.totalLabel, '', moneyPlain(sec.total)]],
       styles:{font:'Sarabun', fontSize:9.5, cellPadding:5},
       headStyles:{fillColor:sec.head, textColor:255, font:'Sarabun'},
       footStyles:{fillColor:sec.foot, textColor:20, font:'Sarabun'},
-      columnStyles:{1:{halign:'right'}},
+      columnStyles:{1:{cellWidth:150}, 2:{halign:'right', cellWidth:105}},
       margin:{left:40,right:40}
     });
   });
@@ -2999,7 +3175,7 @@ function generateBalanceReport(){
   const fmt = document.getElementById('repExportFormat').value;
   const data = buildBalanceReportData(asOf);
   if (fmt === 'pdf') renderBalancePdf(data);
-  else saveSheetFile(fmt, data.fileBase, 'งบดุล', reportSheetRows(data), { widths:[52,20] });
+  else saveSheetFile(fmt, data.fileBase, 'งบดุล', reportSheetRows(data), { widths:[52,34,20] });
 }
 
 /* ---------- remembered format choice (shared by both pages) ---------- */
