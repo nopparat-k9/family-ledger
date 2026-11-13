@@ -292,7 +292,7 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
     </ul>
     <div id="sidebarSyncBadge" class="row-flex" style="gap:6px; padding:8px 4px; font-size:11.5px; color:#9aa6bd; display:none;">
       <span id="sidebarSyncDot" style="width:7px; height:7px; border-radius:50%; background:#7c869c; flex:none;"></span>
-      <span id="sidebarSyncText">Google Drive</span>
+      <span><span id="sidebarSyncText">Google Drive</span><br><span id="sidebarSyncFile" style="font-size:10.5px; opacity:.75;"></span></span>
     </div>
     <div class="sidebar-foot">
       แปลงจากระบบ Access เดิม<br>
@@ -839,6 +839,32 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
           </div>
           <div id="gdriveStatus" class="small-muted" style="margin-bottom:10px;">ยังไม่ได้เชื่อมต่อ</div>
 
+          <div id="gdriveSyncPanel" style="display:none; margin-bottom:14px; padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:var(--paper-raised);">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-weight:600;">
+              <span id="gdriveHealthDot" style="width:10px; height:10px; border-radius:50%; background:#9aa6bd; flex:none;"></span>
+              <span id="gdriveHealthText">—</span>
+            </div>
+            <div style="display:grid; grid-template-columns:150px 1fr; gap:5px 12px; font-size:13px; word-break:break-word;">
+              <div class="small-muted">บัญชี Google</div><div id="gkvAccount">—</div>
+              <div class="small-muted">ชื่อไฟล์บน Drive</div><div id="gkvName">—</div>
+              <div class="small-muted">ตำแหน่งที่เก็บ</div><div><span id="gkvPath">—</span> <a id="gkvLink" href="#" target="_blank" rel="noopener" style="display:none;">เปิดใน Google Drive</a></div>
+              <div class="small-muted">รหัสไฟล์ (File ID)</div><div><code id="gkvId" style="user-select:all; word-break:break-all;">—</code> <button class="pill-btn" id="btnGdriveCopyId" style="padding:2px 10px;">คัดลอก</button></div>
+              <div class="small-muted">เจ้าของไฟล์</div><div id="gkvOwner">—</div>
+              <div class="small-muted">สร้าง / แก้ไขล่าสุด</div><div id="gkvTimes">—</div>
+              <div class="small-muted">ขนาดไฟล์</div><div id="gkvSize">—</div>
+              <div class="small-muted">ข้อมูลในเครื่องนี้</div><div id="gkvLocal">—</div>
+              <div class="small-muted">ตรวจหาข้อมูลใหม่</div><div id="gkvCheck">—</div>
+              <div class="small-muted">ส่ง / ดึงล่าสุด</div><div id="gkvPushPull">—</div>
+              <div class="small-muted">โทเคนหมดอายุใน</div><div id="gkvToken">—</div>
+            </div>
+            <div id="gdriveSyncWarn" style="display:none; margin-top:10px; padding:8px 10px; border-radius:8px; background:var(--rust-soft); color:var(--rust); font-size:13px; white-space:pre-wrap;"></div>
+            <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+              <button class="pill-btn" id="btnGdriveListFiles">ตรวจสอบไฟล์ accounting.db ใน Drive</button>
+              <button class="pill-btn" id="btnGdriveRefreshMeta">รีเฟรชข้อมูลไฟล์</button>
+            </div>
+            <div id="gdriveCandidates" style="margin-top:10px;"></div>
+          </div>
+
           <div id="gdriveFileChoice" style="display:none; margin-bottom:14px; padding:14px; border:1px dashed var(--brass); border-radius:8px; background:var(--brass-soft);">
             <p style="margin:0 0 10px; font-size:13px;">
               บัญชีนี้ยังไม่เจอไฟล์ฐานข้อมูลของตัวเอง — เลือกอย่างใดอย่างหนึ่ง:
@@ -1040,10 +1066,14 @@ async function idbLoadDb(){
 }
 async function persistDb(){
   if (!db) return;
+  // Decide NOW whether this save was triggered by data we just downloaded from Drive. Checking the
+  // flag after the await (as before) was too late: it had already been reset, so every download was
+  // echoed straight back as an upload — and two open devices kept re-uploading each other's file.
+  const cameFromDrive = gdrive.applyingRemoteUpdate;
   try{
     await idbSaveDb(db.export());
   }catch(e){ console.warn('Auto-save failed (non-fatal):', e); }
-  if (!gdrive.applyingRemoteUpdate) gdrivePushIfEnabled();
+  if (!cameFromDrive) gdrivePushIfEnabled();
 }
 
 /* ================================================================
@@ -1085,20 +1115,30 @@ const gdrive = {
   syncing: false,
   pendingToken: null,
   connectRequested: false,
-  navigate: (u)=>{ location.assign(u); }
+  navigate: (u)=>{ location.assign(u); },
+  tokenRetryAfter: 0,
+  lastSyncedFp: null,
+  stats: { checks:0, lastCheckAt:0, lastCheckOk:null, lastError:null, lastPullAt:0, lastPushAt:0, lastSkip:null },
+  fileMeta: null, filePath: null, pathForId: null, candidates: [], metaError: null
 };
 
 function gdriveSetStatus(text){
   const el = document.getElementById('gdriveStatus');
   if (el) el.textContent = text;
   updateSidebarSyncBadge(text);
+  renderSyncPanel();
 }
 
+function updateSidebarFileLabel(){
+  const el = document.getElementById('sidebarSyncFile');
+  if (el) el.textContent = gdrive.fileId ? ('ไฟล์ …' + String(gdrive.fileId).slice(-8)) : '';
+}
 function updateSidebarSyncBadge(statusText){
   const badge = document.getElementById('sidebarSyncBadge');
   const dot = document.getElementById('sidebarSyncDot');
   const label = document.getElementById('sidebarSyncText');
   if (!badge) return;
+  updateSidebarFileLabel();
   if (!gdrive.enabled || !gdrive.clientId){ badge.style.display = 'none'; return; }
   badge.style.display = 'flex';
   if (!gdrive.accessToken || !gdrive.fileId){
@@ -1121,6 +1161,7 @@ async function gdriveRestoreState(){
   gdrive.apiKey = await idbKvGet('gdrive_api_key', null);
   gdrive.projectNumber = await idbKvGet('gdrive_project_number', null);
   gdrive.fileId = await idbKvGet('gdrive_file_id', null);
+  gdrive.lastSyncedFp = await idbKvGet('gdrive_last_fp', null);
   gdrive.lastKnownModifiedTime = await idbKvGet('gdrive_last_modified', null);
   gdrive.enabled = await idbKvGet('gdrive_sync_enabled', true);
   gdrive.consentedBefore = !!(await idbKvGet('gdrive_consented', false)) || !!gdrive.fileId;
@@ -1177,6 +1218,8 @@ function gdriveSettlePending(err, token){
   const p = gdrive.pendingToken; gdrive.pendingToken = null;
   if (!p) return;
   clearTimeout(p.timer);
+  if (err && !p.interactive) gdrive.tokenRetryAfter = Date.now() + 60000; // back off: retry the silent refresh at most once a minute
+  if (!err) gdrive.tokenRetryAfter = 0;
   if (err) p.reject(err); else p.resolve(token);
 }
 function gdriveDispatchToken(resp){
@@ -1189,6 +1232,7 @@ function gdriveDispatchToken(resp){
   gdrive.accessToken = resp.access_token;
   gdrive.tokenExpiresAt = Date.now() + (Number(resp.expires_in)||3500) * 1000;
   idbKvSet('gdrive_consented', true);
+  gdrive.tokenRetryAfter = 0;
   gdriveSettlePending(null, gdrive.accessToken);
   if (wantsUi) gdriveHandleTokenResponse(resp);
 }
@@ -1214,6 +1258,7 @@ function gdriveHandleTokenResponse(resp){
   }
   gdrive.accessToken = resp.access_token;
   gdrive.tokenExpiresAt = Date.now() + (Number(resp.expires_in)||3500) * 1000;
+  gdrive.tokenRetryAfter = 0;
   document.getElementById('btnGdriveConnect').style.display = 'none';
   document.getElementById('btnGdriveDisconnect').style.display = '';
   gdriveSetStatus('เชื่อมต่อแล้ว — กำลังตรวจสอบไฟล์บน Drive...');
@@ -1229,6 +1274,7 @@ async function gdriveEnsureToken(interactive){
   if (gdrive.accessToken && Date.now() < gdrive.tokenExpiresAt - 60000) return gdrive.accessToken;
   if (!gdrive.tokenClient){ gdriveInitTokenClient(); }
   if (!gdrive.tokenClient) throw new Error('โทเคนหมดอายุหรือยังไม่ได้เชื่อมต่อ — กดเชื่อมต่อใหม่ (ถ้าหน้าต่างล็อกอินใช้ไม่ได้ ให้ใช้ปุ่มเชื่อมต่อแบบเปิดหน้า Google)');
+  if (!interactive && gdrive.tokenRetryAfter && Date.now() < gdrive.tokenRetryAfter) throw new Error('โทเคนหมดอายุ และต่ออายุอัตโนมัติไม่สำเร็จ — กดเชื่อมต่อใหม่ (ระบบจะลองต่ออายุเองอีกครั้งใน 1 นาที)');
   if (gdrive.pendingToken){ // a request is already in flight — wait for it instead of stacking another popup
     return new Promise((resolve, reject)=>{
       const prev = gdrive.pendingToken;
@@ -1239,7 +1285,7 @@ async function gdriveEnsureToken(interactive){
   }
   return new Promise((resolve, reject)=>{
     const timer = setTimeout(()=>{ gdriveSettlePending(new Error('timeout')); }, interactive ? 120000 : (gdrive.silentTimeoutMs || 10000));
-    gdrive.pendingToken = { resolve, reject, timer };
+    gdrive.pendingToken = { resolve, reject, timer, interactive: !!interactive };
     try{ gdrive.tokenClient.requestAccessToken({ prompt: interactive ? 'consent' : '' }); }
     catch(e){ gdriveSettlePending(e); }
   });
@@ -1288,21 +1334,19 @@ async function gdriveAfterConnect(){
   document.getElementById('gdriveFileChoice').style.display = 'none';
   gdriveSetStatus(`เชื่อมต่อแล้ว${gdrive.signedInEmail? ' ('+gdrive.signedInEmail+')':''} — ไฟล์บน Drive พร้อมใช้งาน`);
   if (gdrive.enabled) gdriveStartPolling();
+  gdriveRefreshMeta();
+  gdriveListCandidates().catch(()=>{}); // so duplicates are noticed even when this device already remembers a file
 }
 
 async function gdriveSearchForOwnFile(){
-  // drive.file scope only returns files this specific account created/opened with the app
-  const q = encodeURIComponent(`name='${GDRIVE_FILENAME}' and trashed=false`);
-  const res = await gdriveApi(`files?q=${q}&fields=files(id,modifiedTime)&spaces=drive`);
-  const data = await res.json();
-  if (data.files && data.files.length){
-    gdrive.fileId = data.files[0].id;
+  // drive.file scope only returns files this specific account created/opened with the app.
+  // Newest first, so a device that has no saved choice always lands on the most recently updated copy.
+  const files = await gdriveListCandidates();
+  if (files.length){
+    gdrive.fileId = files[0].id;
     await idbKvSet('gdrive_file_id', gdrive.fileId);
     // deliberately NOT setting lastKnownModifiedTime here — this may be the first time
-    // this specific device has ever seen this file, so the very next gdriveCheckAndPull()
-    // must be free to compare against whatever was last stored locally (often null on a
-    // fresh device) and actually pull the real content, rather than assuming we're already
-    // in sync just because we found the file's current metadata.
+    // this device has seen this file, so the next gdriveCheckAndPull() must actually pull it.
     return true;
   }
   return false;
@@ -1316,6 +1360,7 @@ async function gdriveCreateNewFile(){
   });
   const created = await createRes.json();
   gdrive.fileId = created.id;
+  gdrive.lastSyncedFp = null; idbKvSet('gdrive_last_fp', null); // a brand-new file has nothing yet: the first save must upload
   gdrive.lastKnownModifiedTime = created.modifiedTime;
   await idbKvSet('gdrive_file_id', gdrive.fileId);
   await idbKvSet('gdrive_last_modified', gdrive.lastKnownModifiedTime);
@@ -1366,6 +1411,7 @@ async function gdrivePickerCallback(data){
   if (data.action !== google.picker.Action.PICKED) return;
   const file = data.docs[0];
   gdrive.fileId = file.id;
+  gdrive.lastSyncedFp = null; idbKvSet('gdrive_last_fp', null);
   gdrive.lastKnownModifiedTime = null; // force gdriveCheckAndPull to fetch fresh metadata + download
   await idbKvSet('gdrive_file_id', gdrive.fileId);
   await idbKvSet('gdrive_last_modified', null);
@@ -1399,6 +1445,10 @@ async function gdriveGetModifiedTime(){
   return data.modifiedTime;
 }
 
+/* Fingerprint (size + CRC32) of the database as last exchanged with Drive. Anything identical to it
+   is never uploaded again, so two devices can never keep re-uploading the same data to each other. */
+function dbFingerprint(bytes){ return bytes.length + ':' + crc32(bytes); }
+
 let gdrivePendingPush = false;
 let gdriveDirty = false; // true = a local change exists that Drive hasn't confirmed yet
 
@@ -1409,11 +1459,19 @@ async function gdrivePushIfEnabled(){
   if (gdrive.syncing){ gdrivePendingPush = true; return; } // don't drop it — retry once current sync finishes
   gdrive.syncing = true;
   try{
-    await gdriveUpload(db.export());
-    gdriveDirty = false;
-    gdriveSetStatus(`ซิงค์ล่าสุด: ${new Date().toLocaleTimeString('th-TH')} (อัปโหลด)`);
+    const bytes = db.export();
+    const fp = dbFingerprint(bytes);
+    if (fp !== gdrive.lastSyncedFp){ // only send when the content really differs from what Drive already has
+      await gdriveUpload(bytes);
+      gdrive.lastSyncedFp = fp; idbKvSet('gdrive_last_fp', fp);
+      gdrive.stats.lastPushAt = Date.now();
+      gdriveRefreshMeta();
+      gdriveSetStatus(`ซิงค์ล่าสุด: ${new Date().toLocaleTimeString('th-TH')} (อัปโหลด)`);
+    }
+    gdriveDirty = false; gdrive.stats.lastError = null;
   }catch(e){
     console.warn('Drive upload failed:', e);
+    gdrive.stats.lastError = e.message;
     gdriveSetStatus('ซิงค์ไม่สำเร็จ: ' + e.message);
   }finally{
     gdrive.syncing = false;
@@ -1426,9 +1484,11 @@ async function gdrivePushIfEnabled(){
 }
 
 async function gdriveCheckAndPull(){
-  if (!gdrive.enabled || !gdrive.accessToken || !gdrive.fileId || gdrive.syncing) return;
-  if (editingLedgerRowId !== null){ return; } // never pull while a row is actively being edited — would clobber unsaved UI state
+  if (!gdrive.enabled || !gdrive.accessToken || !gdrive.fileId) return;
+  if (gdrive.syncing){ gdrive.stats.lastSkip = 'busy'; return; }
+  if (editingLedgerRowId !== null){ gdrive.stats.lastSkip = 'editing'; updateSyncDynamic(); return; } // never pull while a row is actively being edited — would clobber unsaved UI state
   gdrive.syncing = true;
+  gdrive.stats.checks++; gdrive.stats.lastCheckAt = Date.now(); gdrive.stats.lastSkip = null;
   try{
     const remoteModified = await gdriveGetModifiedTime();
     if (remoteModified && remoteModified !== gdrive.lastKnownModifiedTime){
@@ -1440,19 +1500,25 @@ async function gdriveCheckAndPull(){
         db = candidate;
         addedThisSession = [];
         refreshAll();
+        gdrive.lastSyncedFp = dbFingerprint(db.export()); idbKvSet('gdrive_last_fp', gdrive.lastSyncedFp);
         toast('ซิงค์ข้อมูลใหม่จากอุปกรณ์อื่นแล้ว');
       } finally {
         gdrive.applyingRemoteUpdate = false;
       }
       gdrive.lastKnownModifiedTime = remoteModified;
       await idbKvSet('gdrive_last_modified', remoteModified);
+      gdrive.stats.lastPullAt = Date.now();
       gdriveSetStatus(`ซิงค์ล่าสุด: ${new Date().toLocaleTimeString('th-TH')} (ดาวน์โหลดข้อมูลใหม่)`);
+      gdriveRefreshMeta();
     }
+    gdrive.stats.lastCheckOk = true; gdrive.stats.lastError = null;
   }catch(e){
     console.warn('Drive check failed:', e);
+    gdrive.stats.lastCheckOk = false; gdrive.stats.lastError = e.message;
     gdriveSetStatus('ตรวจสอบข้อมูลใหม่ไม่สำเร็จ: ' + e.message);
   }finally{
     gdrive.syncing = false;
+    updateSyncDynamic();
   }
 }
 
@@ -1460,6 +1526,7 @@ function gdriveStartPolling(){
   gdriveStopPolling();
   gdrive.pollHandle = setInterval(gdriveCheckAndPull, GDRIVE_POLL_MS);
   gdriveCheckAndPull();
+  gdriveRefreshMeta();
 }
 function gdriveStopPolling(){
   if (gdrive.pollHandle){ clearInterval(gdrive.pollHandle); gdrive.pollHandle = null; }
@@ -1571,6 +1638,196 @@ function wireGdriveSettings(){
   document.getElementById('btnGdriveOpenPicker').addEventListener('click', gdriveOpenPicker);
   document.getElementById('btnGdriveConnectRedirect').addEventListener('click', gdriveStartRedirectLogin);
   document.getElementById('gdriveRedirectUri').textContent = gdriveRedirectUri();
+  wireSyncPanel();
+}
+
+/* ================================================================
+   DRIVE SYNC DIAGNOSTICS — which file, where it lives, and whether the 12-second check is alive
+   ================================================================ */
+const GDRIVE_META_FIELDS = 'id,name,parents,owners(displayName,emailAddress),createdTime,modifiedTime,size,ownedByMe,shared,webViewLink,trashed';
+const fmtDateTime = (iso)=> iso ? new Date(iso).toLocaleString('th-TH', {dateStyle:'medium', timeStyle:'medium'}) : '—';
+const shortId = (id)=> id ? '…' + String(id).slice(-8) : '';
+function agoText(ms){
+  if (!ms) return 'ยังไม่เคย';
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  return s < 60 ? `${s} วินาทีที่แล้ว` : s < 3600 ? `${Math.floor(s/60)} นาทีที่แล้ว` : `${Math.floor(s/3600)} ชั่วโมงที่แล้ว`;
+}
+
+async function gdriveListCandidates(){
+  const q = encodeURIComponent(`name='${GDRIVE_FILENAME}' and trashed=false`);
+  const fields = encodeURIComponent('files(id,name,createdTime,modifiedTime,size,ownedByMe,owners(emailAddress),parents,webViewLink)');
+  const res = await gdriveApi(`files?q=${q}&fields=${fields}&orderBy=modifiedTime%20desc&pageSize=50&spaces=drive`);
+  const data = await res.json();
+  gdrive.candidates = data.files || [];
+  renderSyncPanel();
+  return gdrive.candidates;
+}
+
+async function gdriveResolvePath(meta){
+  const name = meta.name || GDRIVE_FILENAME;
+  if (!meta.parents || !meta.parents.length){
+    return meta.ownedByMe === false ? 'แชร์ถึงคุณ (Shared with me) / ' + name : name + ' (Drive ไม่ระบุโฟลเดอร์)';
+  }
+  const names = []; let pid = meta.parents[0]; let complete = true;
+  for (let i = 0; i < 8 && pid; i++){
+    try{
+      const r = await gdriveApi(`files/${pid}?fields=id,name,parents`);
+      const f = await r.json();
+      names.unshift(f.name || '?'); pid = f.parents && f.parents[0];
+    }catch(e){ complete = false; break; }
+  }
+  if (!complete){ // the drive.file permission may not allow reading folder names; the root folder can still be recognised
+    try{
+      const r = await gdriveApi('files/root?fields=id'); const root = await r.json();
+      if (root.id === pid){ names.unshift('My Drive'); complete = true; }
+    }catch(_){ /* keep the partial path */ }
+  }
+  return (complete ? '' : '… / ') + names.join(' / ') + (names.length ? ' / ' : '') + name;
+}
+
+async function gdriveRefreshMeta(){
+  if (!gdrive.fileId || !gdrive.accessToken) return;
+  const id = gdrive.fileId;
+  try{
+    const r = await gdriveApi(`files/${id}?fields=${encodeURIComponent(GDRIVE_META_FIELDS)}`);
+    const meta = await r.json();
+    if (id !== gdrive.fileId) return; // the user switched files meanwhile
+    gdrive.fileMeta = meta; gdrive.metaError = null;
+    if (gdrive.pathForId !== id){ gdrive.filePath = await gdriveResolvePath(meta); gdrive.pathForId = id; }
+  }catch(e){ gdrive.metaError = e.message; }
+  renderSyncPanel();
+}
+
+function syncHealth(){
+  const st = gdrive.stats, now = Date.now(), every = GDRIVE_POLL_MS / 1000;
+  if (!gdrive.clientId) return {level:'off', text:'ยังไม่ได้ตั้งค่า Google Drive'};
+  if (!gdrive.accessToken) return {level:'bad', text: gdrive.fileId ? 'ยังไม่ได้เชื่อมต่อในเซสชันนี้ — ตอนนี้ไม่ได้ซิงค์ (กด "เชื่อมต่อ Google Drive")' : 'ยังไม่ได้เชื่อมต่อ'};
+  if (!gdrive.fileId) return {level:'bad', text:'เชื่อมต่อแล้ว แต่ยังไม่ได้เลือก/สร้างไฟล์ฐานข้อมูล'};
+  if (!gdrive.enabled) return {level:'warn', text:'auto-sync ปิดอยู่ — ข้อมูลไม่ถูกส่ง/ดึงอัตโนมัติ'};
+  if (!gdrive.pollHandle) return {level:'bad', text:'ตัวตรวจหาข้อมูลใหม่ไม่ได้ทำงาน — กด "ซิงค์ตอนนี้" หรือปิด/เปิดสวิตช์ auto-sync'};
+  if (now >= gdrive.tokenExpiresAt) return {level:'warn', text:'โทเคนหมดอายุ — กำลังลองต่ออายุอัตโนมัติ ถ้าไม่สำเร็จให้กดเชื่อมต่อใหม่'};
+  if (st.lastCheckOk === false) return {level:'bad', text:'ตรวจหาข้อมูลใหม่ล้มเหลว: ' + (st.lastError || 'ไม่ทราบสาเหตุ')};
+  if (document.visibilityState === 'hidden') return {level:'warn', text:`แท็บนี้อยู่เบื้องหลัง — เบราว์เซอร์อาจชะลอการตรวจจากทุก ${every} วินาที`};
+  if (st.lastCheckAt && now - st.lastCheckAt > GDRIVE_POLL_MS * 2.5) return {level:'warn', text:`ไม่มีการตรวจมา ${Math.round((now - st.lastCheckAt)/1000)} วินาทีแล้ว (ควรทุก ${every} วินาที)`};
+  return {level:'ok', text:`ซิงค์ปกติ — ตรวจหาข้อมูลใหม่ทุก ${every} วินาที`};
+}
+
+/* the cheap, fast-changing lines (updated every second while Settings is open) */
+function updateSyncDynamic(){
+  const set = (id, t)=>{ const el = document.getElementById(id); if (el) el.textContent = t; };
+  if (!document.getElementById('gdriveSyncPanel')) return;
+  const h = syncHealth(), st = gdrive.stats;
+  const dot = document.getElementById('gdriveHealthDot');
+  if (dot) dot.style.background = ({ok:'#3f9b7c', warn:'#d9a23b', bad:'#d6465a', off:'#9aa6bd'})[h.level];
+  set('gdriveHealthText', h.text);
+  set('gkvCheck', `ทุก ${GDRIVE_POLL_MS/1000} วินาที • ตรวจล่าสุด ${st.lastCheckAt ? new Date(st.lastCheckAt).toLocaleTimeString('th-TH') + ' (' + agoText(st.lastCheckAt) + ')' : 'ยังไม่เคย'} • รวม ${st.checks} ครั้ง` +
+      (st.lastSkip === 'editing' ? ' • พักการตรวจชั่วคราว (กำลังแก้ไขรายการในหน้าค้นหา)' : ''));
+  set('gkvPushPull', `ส่งขึ้น Drive: ${agoText(st.lastPushAt)} • ดึงลงมา: ${agoText(st.lastPullAt)}`);
+  const left = gdrive.tokenExpiresAt - Date.now();
+  set('gkvToken', !gdrive.accessToken ? '—' : left > 0 ? `${Math.floor(left/60000)} นาที ${Math.floor((left%60000)/1000)} วินาที` : 'หมดอายุแล้ว');
+  if (db){
+    try{ const r = qAll("SELECT COUNT(*) n, MAX(j_date) d FROM journal")[0]; set('gkvLocal', `${r.n.toLocaleString('th-TH')} รายการ • รายการล่าสุด ${r.d ? fmtDate(r.d) : '—'}`); }catch(_){ /* db not ready */ }
+  }
+}
+
+/* the slower, descriptive part (only when something about the file changes) */
+function renderSyncPanel(){
+  updateSidebarFileLabel();
+  const panel = document.getElementById('gdriveSyncPanel'); if (!panel) return;
+  const show = !!gdrive.clientId && !!(gdrive.accessToken || gdrive.fileId);
+  panel.style.display = show ? 'block' : 'none';
+  if (!show) return;
+  const set = (id, t)=>{ const el = document.getElementById(id); if (el) el.textContent = t; };
+  const m = gdrive.fileMeta;
+  set('gkvAccount', gdrive.signedInEmail || (gdrive.accessToken ? 'ไม่ทราบอีเมล' : '(ยังไม่ได้เชื่อมต่อในเซสชันนี้)'));
+  set('gkvName', m ? m.name : (gdrive.fileId ? GDRIVE_FILENAME + ' (รอข้อมูลจาก Drive...)' : '—'));
+  set('gkvPath', gdrive.filePath || (gdrive.fileId ? 'กำลังตรวจสอบ...' : '—'));
+  set('gkvId', gdrive.fileId || '—');
+  const owner = m && m.owners && m.owners[0] ? m.owners[0].emailAddress : null;
+  set('gkvOwner', owner ? owner + (m.ownedByMe ? ' (คุณเป็นเจ้าของ)' : ' (เจ้าของคนอื่น — แชร์มาให้)') : '—');
+  set('gkvTimes', m ? `${fmtDateTime(m.createdTime)}  /  ${fmtDateTime(m.modifiedTime)}` : '—');
+  set('gkvSize', m && m.size ? (Number(m.size)/1024).toFixed(1) + ' KB' : '—');
+  const link = document.getElementById('gkvLink');
+  if (link){
+    const url = m && /^https:\/\/(drive|docs)\.google\.com\//.test(m.webViewLink || '') ? m.webViewLink : (gdrive.fileId ? 'https://drive.google.com/file/d/' + encodeURIComponent(gdrive.fileId) + '/view' : '');
+    link.style.display = url ? 'inline' : 'none'; if (url) link.href = url;
+  }
+  const msgs = [];
+  if (gdrive.candidates.length > 1) msgs.push(`พบไฟล์ ${GDRIVE_FILENAME} ใน Drive ${gdrive.candidates.length} ไฟล์ — เครื่องนี้ใช้ไฟล์ ${shortId(gdrive.fileId)}\nถ้าเครื่องอื่นแสดงรหัสไฟล์ไม่เหมือนกัน แปลว่าซิงค์คนละไฟล์ (กดปุ่ม "ตรวจสอบไฟล์" ด้านล่างเพื่อดูสรุปข้อมูลแต่ละไฟล์ แล้วเลือกให้ทุกเครื่องใช้ไฟล์เดียวกัน)`);
+  if (gdrive.candidates.length && gdrive.fileId && !gdrive.candidates.some(f=>f.id === gdrive.fileId)) msgs.push(`ไฟล์ที่เครื่องนี้ใช้อยู่ (${shortId(gdrive.fileId)}) ไม่อยู่ในรายการไฟล์ที่บัญชี Google นี้มองเห็น`);
+  if (gdrive.metaError) msgs.push('อ่านข้อมูลไฟล์ไม่สำเร็จ: ' + gdrive.metaError);
+  const warn = document.getElementById('gdriveSyncWarn');
+  if (warn){ warn.textContent = msgs.join('\n'); warn.style.display = msgs.length ? 'block' : 'none'; }
+  updateSyncDynamic();
+}
+
+function renderCandidates(){
+  const box = document.getElementById('gdriveCandidates'); if (!box) return;
+  if (!gdrive.candidates.length){ box.innerHTML = '<div class="small-muted">ไม่พบไฟล์ accounting.db ที่บัญชีนี้มองเห็น</div>'; return; }
+  box.innerHTML = '<div class="small-muted" style="margin-bottom:6px;">ไฟล์ ' + escapeHtml(GDRIVE_FILENAME) + ' ที่แอปมองเห็น (ใหม่สุดก่อน):</div>' + gdrive.candidates.map(f=>{
+    const cur = f.id === gdrive.fileId;
+    const owner = f.owners && f.owners[0] ? f.owners[0].emailAddress : '—';
+    const url = /^https:\/\/(drive|docs)\.google\.com\//.test(f.webViewLink || '') ? f.webViewLink : '';
+    return `<div style="border:1px solid ${cur ? 'var(--brass)' : 'var(--line)'}; border-radius:8px; padding:8px 10px; margin-bottom:6px; font-size:13px;">
+      <b>${escapeHtml(f.name || GDRIVE_FILENAME)}</b> <code>${escapeHtml(shortId(f.id))}</code> ${cur ? '<span class="badge b-asset">กำลังใช้งานอยู่ในเครื่องนี้</span>' : ''}<br>
+      <span class="small-muted">แก้ไขล่าสุด ${escapeHtml(fmtDateTime(f.modifiedTime))} • สร้าง ${escapeHtml(fmtDateTime(f.createdTime))} • ${f.size ? (Number(f.size)/1024).toFixed(1) + ' KB' : '—'} • เจ้าของ ${escapeHtml(owner)}</span>
+      <div data-sum="${escapeHtml(f.id)}" style="margin:4px 0;"></div>
+      <button class="pill-btn" data-act="inspect" data-id="${escapeHtml(f.id)}" style="padding:3px 10px;">ดูสรุปข้อมูลในไฟล์</button>
+      ${cur ? '' : `<button class="pill-btn primary" data-act="use" data-id="${escapeHtml(f.id)}" style="padding:3px 10px;">ใช้ไฟล์นี้</button>`}
+      ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" style="margin-left:6px;">เปิดใน Drive</a>` : ''}
+    </div>`;
+  }).join('');
+}
+
+async function gdriveInspectFile(id){
+  const slot = Array.from(document.querySelectorAll('[data-sum]')).find(e=>e.dataset.sum === id);
+  if (slot) slot.textContent = 'กำลังอ่านไฟล์...';
+  try{
+    const res = await gdriveApi(`files/${id}?alt=media`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const probe = new SQL.Database(bytes);
+    const r = probe.exec("SELECT COUNT(*), MAX(j_date), COUNT(DISTINCT code) FROM journal")[0].values[0];
+    probe.close();
+    if (slot) slot.textContent = `ข้อมูลในไฟล์: ${Number(r[0]).toLocaleString('th-TH')} รายการ • รายการล่าสุด ${r[1] ? fmtDate(r[1]) : '—'} • ใช้ ${r[2]} บัญชี`;
+  }catch(e){ if (slot) slot.textContent = 'อ่านไฟล์ไม่สำเร็จ: ' + e.message; }
+}
+
+async function gdriveUseFile(id){
+  if (!id || id === gdrive.fileId) return;
+  const f = gdrive.candidates.find(c=>c.id === id) || {};
+  const msg = `เปลี่ยนไปซิงค์กับไฟล์ ${shortId(id)} ?\n\n- ข้อมูลในเครื่องนี้จะถูกแทนที่ด้วยข้อมูลจากไฟล์นั้น (แก้ไขล่าสุด ${fmtDateTime(f.modifiedTime)})\n- ระบบจะดาวน์โหลดไฟล์สำรองข้อมูลของเครื่องนี้ให้ก่อน เก็บไว้เผื่อต้องกลับมาใช้\n- เครื่องอื่นที่ซิงค์คนละไฟล์ ต้องเลือกไฟล์เดียวกันนี้ด้วย`;
+  if (!confirm(msg)) return;
+  try{ exportDb(); }catch(e){ console.warn('backup before switching failed:', e); }
+  gdrive.fileId = id; gdrive.lastSyncedFp = null; idbKvSet('gdrive_last_fp', null); gdrive.lastKnownModifiedTime = null; gdrive.fileMeta = null; gdrive.filePath = null; gdrive.pathForId = null; gdriveDirty = false;
+  await idbKvSet('gdrive_file_id', id); await idbKvSet('gdrive_last_modified', null);
+  gdriveSetStatus('เปลี่ยนไฟล์แล้ว — กำลังดาวน์โหลดข้อมูลจากไฟล์ใหม่...');
+  await gdriveCheckAndPull();
+  if (gdrive.enabled) gdriveStartPolling();
+  renderCandidates(); renderSyncPanel();
+  toast(`เปลี่ยนไปใช้ไฟล์ ${shortId(id)} แล้ว`);
+}
+
+function wireSyncPanel(){
+  document.getElementById('btnGdriveListFiles').addEventListener('click', async ()=>{
+    if (!gdrive.accessToken){ toast('เชื่อมต่อ Google Drive ก่อน'); return; }
+    try{ await gdriveListCandidates(); renderCandidates(); }
+    catch(e){ toast('อ่านรายการไฟล์ไม่สำเร็จ: ' + e.message); }
+  });
+  document.getElementById('btnGdriveRefreshMeta').addEventListener('click', async ()=>{
+    if (!gdrive.accessToken){ toast('เชื่อมต่อ Google Drive ก่อน'); return; }
+    gdrive.pathForId = null; await gdriveRefreshMeta(); toast('รีเฟรชข้อมูลไฟล์แล้ว');
+  });
+  document.getElementById('btnGdriveCopyId').addEventListener('click', ()=>{
+    const id = gdrive.fileId; if (!id) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(id).then(()=>toast('คัดลอกรหัสไฟล์แล้ว'), ()=>toast('คัดลอกไม่ได้ — เลือกข้อความแล้วกด Ctrl+C'));
+    else toast('เลือกรหัสไฟล์ แล้วกด Ctrl+C เพื่อคัดลอก');
+  });
+  document.getElementById('gdriveCandidates').addEventListener('click', (e)=>{
+    const b = e.target.closest('button[data-act]'); if (!b) return;
+    if (b.dataset.act === 'inspect') gdriveInspectFile(b.dataset.id);
+    else if (b.dataset.act === 'use') gdriveUseFile(b.dataset.id);
+  });
+  setInterval(()=>{ const v = document.getElementById('view-settings'); if (v && v.classList.contains('active')) updateSyncDynamic(); }, 1000);
 }
 
 /* ---------- Redirect (no-popup) sign-in ----------
