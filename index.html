@@ -858,11 +858,18 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
               <div class="small-muted">โทเคนหมดอายุใน</div><div id="gkvToken">—</div>
             </div>
             <div id="gdriveSyncWarn" style="display:none; margin-top:10px; padding:8px 10px; border-radius:8px; background:var(--rust-soft); color:var(--rust); font-size:13px; white-space:pre-wrap;"></div>
+            <div id="gdriveRestoreRow" style="display:none; margin-top:8px;"><button class="pill-btn primary" id="btnGdriveRestoreCurrent">กู้คืนไฟล์ที่ใช้อยู่จากถังขยะ</button></div>
             <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
               <button class="pill-btn" id="btnGdriveListFiles">ตรวจสอบไฟล์ accounting.db ใน Drive</button>
               <button class="pill-btn" id="btnGdriveRefreshMeta">รีเฟรชข้อมูลไฟล์</button>
+              <button class="pill-btn" id="btnGdriveListTrash">ดูไฟล์ accounting.db ในถังขยะ</button>
             </div>
             <div id="gdriveCandidates" style="margin-top:10px;"></div>
+            <div id="gdriveTrashList" style="margin-top:10px;"></div>
+            <div style="margin-top:12px;">
+              <div class="small-muted" style="margin-bottom:4px;">ประวัติการผูกไฟล์ของเครื่องนี้ (ใหม่สุดก่อน) — ดูว่าเครื่องนี้เคยเปลี่ยนไฟล์เมื่อไหร่และเพราะอะไร</div>
+              <div id="gdriveHistory" style="font-size:13px;"></div>
+            </div>
             <div style="margin-top:12px; padding-top:10px; border-top:1px dashed var(--line);">
               <div class="small-muted" style="margin-bottom:6px;">ต้องการให้เครื่องนี้ใช้ไฟล์ที่ทราบรหัสอยู่แล้ว (เช่น ใช้ไฟล์เดียวกับอีกเครื่อง) — วางรหัสไฟล์ (File ID) หรือลิงก์ไฟล์จาก Drive</div>
               <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -1131,7 +1138,7 @@ const gdrive = {
   tokenRetryAfter: 0,
   lastSyncedFp: null,
   stats: { checks:0, lastCheckAt:0, lastCheckOk:null, lastError:null, lastPullAt:0, lastPushAt:0, lastSkip:null },
-  manualMeta: null, fileMeta: null, filePath: null, pathForId: null, candidates: [], metaError: null
+  history: [], trashed: [], manualMeta: null, fileMeta: null, filePath: null, pathForId: null, candidates: [], metaError: null
 };
 
 function gdriveSetStatus(text){
@@ -1174,6 +1181,7 @@ async function gdriveRestoreState(){
   gdrive.projectNumber = await idbKvGet('gdrive_project_number', null);
   gdrive.fileId = await idbKvGet('gdrive_file_id', null);
   gdrive.lastSyncedFp = await idbKvGet('gdrive_last_fp', null);
+  gdrive.history = (await idbKvGet('gdrive_file_history', [])) || [];
   gdrive.lastKnownModifiedTime = await idbKvGet('gdrive_last_modified', null);
   gdrive.enabled = await idbKvGet('gdrive_sync_enabled', true);
   gdrive.consentedBefore = !!(await idbKvGet('gdrive_consented', false)) || !!gdrive.fileId;
@@ -1357,6 +1365,7 @@ async function gdriveSearchForOwnFile(){
   if (files.length){
     gdrive.fileId = files[0].id;
     await idbKvSet('gdrive_file_id', gdrive.fileId);
+    await gdriveLogBinding(gdrive.fileId, 'ค้นเจออัตโนมัติ (ไฟล์ใหม่สุด)');
     // deliberately NOT setting lastKnownModifiedTime here — this may be the first time
     // this device has seen this file, so the next gdriveCheckAndPull() must actually pull it.
     return true;
@@ -1376,6 +1385,7 @@ async function gdriveCreateNewFile(){
   gdrive.lastKnownModifiedTime = created.modifiedTime;
   await idbKvSet('gdrive_file_id', gdrive.fileId);
   await idbKvSet('gdrive_last_modified', gdrive.lastKnownModifiedTime);
+  await gdriveLogBinding(created.id, 'สร้างไฟล์ใหม่');
 }
 
 /* ---------- Google Picker (lets a second/different Google account pick a file
@@ -1427,6 +1437,7 @@ async function gdrivePickerCallback(data){
   gdrive.lastKnownModifiedTime = null; // force gdriveCheckAndPull to fetch fresh metadata + download
   await idbKvSet('gdrive_file_id', gdrive.fileId);
   await idbKvSet('gdrive_last_modified', null);
+  await gdriveLogBinding(file.id, 'เลือกผ่าน Google Picker');
   document.getElementById('gdriveFileChoice').style.display = 'none';
   gdriveSetStatus(`เลือกไฟล์ "${file.name}" แล้ว — กำลังดาวน์โหลดข้อมูล...`);
   await gdriveCheckAndPull();
@@ -1610,9 +1621,8 @@ function wireGdriveSettings(){
   });
   document.getElementById('btnGdriveDisconnect').addEventListener('click', ()=>{
     gdriveStopPolling();
-    if (gdrive.accessToken && window.google) {
-      try{ google.accounts.oauth2.revoke(gdrive.accessToken, ()=>{}); }catch(_){}
-    }
+    // Deliberately NOT calling google.accounts.oauth2.revoke(): that withdraws everything the user ever
+    // granted this app, and the app can then lose its access to the files it created earlier.
     gdrive.accessToken = null;
     gdrive.tokenExpiresAt = 0;
     gdrive.signedInEmail = null;
@@ -1620,7 +1630,7 @@ function wireGdriveSettings(){
     document.getElementById('btnGdriveDisconnect').style.display = 'none';
     document.getElementById('gdriveFileChoice').style.display = 'none';
     gdriveSetStatus('ยังไม่ได้เชื่อมต่อ');
-    toast('ตัดการเชื่อมต่อ Google Drive แล้ว');
+    toast('ตัดการเชื่อมต่อแล้ว — ไฟล์ใน Drive และสิทธิ์ที่ให้ไว้ยังอยู่ เชื่อมต่อใหม่ได้ทันที');
   });
   document.getElementById('toggleGdriveSync').addEventListener('change', async (e)=>{
     gdrive.enabled = e.target.checked;
@@ -1637,6 +1647,13 @@ function wireGdriveSettings(){
   });
   document.getElementById('btnGdriveCreateNew').addEventListener('click', async ()=>{
     try{
+      let existing = [];
+      try{ existing = await gdriveListCandidates(); }catch(_){ /* the list is only used for the warning */ }
+      const rows = qAll("SELECT COUNT(*) n FROM journal")[0].n;
+      let warn = '';
+      if (existing.length) warn += `พบไฟล์ accounting.db อยู่แล้ว ${existing.length} ไฟล์ใน Drive — ปกติควรกด "ใช้ไฟล์นี้" ที่ไฟล์เดิมแทนการสร้างใหม่ (สร้างใหม่ = ได้รหัสไฟล์ใหม่ และอีกเครื่องอาจยังใช้ไฟล์เก่า)\n\n`;
+      if (!rows) warn += '⚠ ข้อมูลในเครื่องนี้ว่างเปล่า (0 รายการ) — จะอัปโหลดไฟล์เปล่าขึ้น Drive\n\n';
+      if (warn && !confirm(warn + 'ต้องการสร้างไฟล์ใหม่จริงหรือไม่?')) return;
       await gdriveCreateNewFile();
       document.getElementById('gdriveFileChoice').style.display = 'none';
       gdriveSetStatus(`สร้างไฟล์ใหม่แล้ว${gdrive.signedInEmail? ' ('+gdrive.signedInEmail+')':''} — กำลังอัปโหลดข้อมูลปัจจุบัน...`);
@@ -1728,6 +1745,7 @@ function syncHealth(){
   if (!gdrive.fileId) return {level:'bad', text:'เชื่อมต่อแล้ว แต่ยังไม่ได้เลือก/สร้างไฟล์ฐานข้อมูล'};
   if (!gdrive.enabled) return {level:'warn', text:'auto-sync ปิดอยู่ — ข้อมูลไม่ถูกส่ง/ดึงอัตโนมัติ'};
   if (!gdrive.pollHandle) return {level:'bad', text:'ตัวตรวจหาข้อมูลใหม่ไม่ได้ทำงาน — กด "ซิงค์ตอนนี้" หรือปิด/เปิดสวิตช์ auto-sync'};
+  if (gdrive.fileMeta && gdrive.fileMeta.trashed) return {level:'warn', text:'ไฟล์ที่ใช้อยู่อยู่ในถังขยะของ Drive — ควรกู้คืน (ถังขยะถูกล้างอัตโนมัติ และเครื่องอื่นจะค้นหาไฟล์นี้ไม่เจอ)'};
   if (now >= gdrive.tokenExpiresAt) return {level:'warn', text:'โทเคนหมดอายุ — กำลังลองต่ออายุอัตโนมัติ ถ้าไม่สำเร็จให้กดเชื่อมต่อใหม่'};
   if (st.lastCheckOk === false) return {level:'bad', text:'ตรวจหาข้อมูลใหม่ล้มเหลว: ' + (st.lastError || 'ไม่ทราบสาเหตุ')};
   if (document.visibilityState === 'hidden') return {level:'warn', text:`แท็บนี้อยู่เบื้องหลัง — เบราว์เซอร์อาจชะลอการตรวจจากทุก ${every} วินาที`};
@@ -1778,8 +1796,10 @@ function renderSyncPanel(){
   const msgs = [];
   if (gdrive.candidates.length > 1) msgs.push(`พบไฟล์ ${GDRIVE_FILENAME} ใน Drive ${gdrive.candidates.length} ไฟล์ — เครื่องนี้ใช้ไฟล์ ${shortId(gdrive.fileId)}\nถ้าเครื่องอื่นแสดงรหัสไฟล์ไม่เหมือนกัน แปลว่าซิงค์คนละไฟล์ (กดปุ่ม "ตรวจสอบไฟล์" ด้านล่างเพื่อดูสรุปข้อมูลแต่ละไฟล์ แล้วเลือกให้ทุกเครื่องใช้ไฟล์เดียวกัน)`);
   if (m && m.trashed) msgs.push('ไฟล์ที่เครื่องนี้ใช้อยู่ ถูกย้ายไปอยู่ใน "ถังขยะ" ของ Google Drive — ควรกู้คืนไฟล์ หรือเปลี่ยนไปใช้ไฟล์อื่น');
-  if (gdrive.candidates.length && gdrive.fileId && !gdrive.candidates.some(f=>f.id === gdrive.fileId)) msgs.push(`ไฟล์ที่เครื่องนี้ใช้อยู่ (${shortId(gdrive.fileId)}) ไม่พบจากการค้นหาชื่อ ${GDRIVE_FILENAME} — เครื่องอื่นจึงมองไม่เห็นไฟล์นี้ และมักสร้างไฟล์ใหม่ของตัวเองขึ้นมาแทน (ทำให้ซิงค์คนละไฟล์)\nสาเหตุที่พบบ่อย: ไฟล์อยู่ในถังขยะ หรือสร้างจากแอปเวอร์ชัน/Client ID อื่น\nแนะนำ: กด "ดูสรุปข้อมูลในไฟล์" ของไฟล์ด้านล่าง ถ้าตรงกับเครื่องนี้ให้กด "ใช้ไฟล์นี้"`);
+  if (gdrive.candidates.length && gdrive.fileId && !gdrive.candidates.some(f=>f.id === gdrive.fileId)) msgs.push(`ไฟล์ที่เครื่องนี้ใช้อยู่ (${shortId(gdrive.fileId)}) ไม่พบจากการค้นหาชื่อ ${GDRIVE_FILENAME} — เครื่องอื่นจึงมองไม่เห็นไฟล์นี้ และมักสร้างไฟล์ใหม่ของตัวเองขึ้นมาแทน (ทำให้ซิงค์คนละไฟล์)\n${(m && m.trashed === false) ? 'ไฟล์นี้ไม่ได้อยู่ในถังขยะ — อาจสร้างจากแอปเวอร์ชัน/Client ID อื่น หรือแอปเสียสิทธิ์ระดับไฟล์หลังมีการเพิกถอนสิทธิ์' : 'สาเหตุที่พบบ่อย: ไฟล์อยู่ในถังขยะ หรือสร้างจากแอปเวอร์ชัน/Client ID อื่น'}\nแนะนำ: กด "ดูสรุปข้อมูลในไฟล์" ของไฟล์ด้านล่าง ถ้าตรงกับเครื่องนี้ให้กด "ใช้ไฟล์นี้"`);
   if (gdrive.metaError) msgs.push('อ่านข้อมูลไฟล์ไม่สำเร็จ: ' + gdrive.metaError);
+  const rr = document.getElementById('gdriveRestoreRow'); if (rr) rr.style.display = (m && m.trashed) ? 'block' : 'none';
+  renderHistory();
   const warn = document.getElementById('gdriveSyncWarn');
   if (warn){ warn.textContent = msgs.join('\n'); warn.style.display = msgs.length ? 'block' : 'none'; }
   updateSyncDynamic();
@@ -1800,6 +1820,7 @@ function renderCandidates(){
       <span class="small-muted">แก้ไขล่าสุด ${escapeHtml(fmtDateTime(m.modifiedTime))} • สร้าง ${escapeHtml(fmtDateTime(m.createdTime))} • ${m.size ? (Number(m.size)/1024).toFixed(1) + ' KB' : '—'} • เจ้าของ ${escapeHtml(owner)}</span>
       <div data-sum="${escapeHtml(cur)}" style="margin:4px 0; white-space:pre-wrap;"></div>
       <button class="pill-btn" data-act="inspect" data-id="${escapeHtml(cur)}" style="padding:3px 10px;">ดูสรุปข้อมูลในไฟล์</button>
+      ${m.trashed ? `<button class="pill-btn primary" data-act="restore" data-id="${escapeHtml(cur)}" style="padding:3px 10px;">กู้คืนจากถังขยะ</button>` : ''}
     </div>`;
   }
   if (gdrive.candidates.length) html += '<div class="small-muted" style="margin-bottom:6px;">ไฟล์ ' + escapeHtml(GDRIVE_FILENAME) + ' ที่ค้นหาเจอ (ใหม่สุดก่อน):</div>';
@@ -1840,6 +1861,57 @@ function canonTable(database, sql){
   catch(_){ return ''; }
 }
 
+/* ---- which files has this device been bound to, and why (explains "a new ID every time") ---- */
+async function gdriveLogBinding(id, how){
+  const hist = [{ id, how, at: new Date().toISOString() }].concat(gdrive.history || []).slice(0, 20);
+  gdrive.history = hist;
+  await idbKvSet('gdrive_file_history', hist);
+  renderHistory();
+}
+function renderHistory(){
+  const box = document.getElementById('gdriveHistory'); if (!box) return;
+  const hist = gdrive.history || [];
+  box.innerHTML = hist.length ? hist.map(h=>
+    `<div style="padding:2px 0;">${escapeHtml(fmtDateTime(h.at))} — ${escapeHtml(h.how)} — <code>${escapeHtml(shortId(h.id))}</code>
+      <button class="pill-btn" data-act="check" data-id="${escapeHtml(h.id)}" style="padding:1px 8px; margin-left:4px;">ตรวจสอบ</button></div>`).join('')
+    : '<span class="small-muted">ยังไม่มีประวัติ (จะเริ่มบันทึกตั้งแต่ครั้งนี้)</span>';
+}
+
+/* ---- the Drive trash ---- */
+async function gdriveRestoreFromTrash(id){
+  try{
+    await gdriveApi(`files/${encodeURIComponent(id)}?fields=id,trashed`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ trashed:false }) });
+  }catch(e){ toast('กู้คืนไม่สำเร็จ: ' + e.message); return; }
+  toast('กู้คืนไฟล์จากถังขยะแล้ว');
+  if (id === gdrive.fileId) await gdriveRefreshMeta();
+  if (gdrive.manualMeta && gdrive.manualMeta.id === id){ gdrive.manualMeta.trashed = false; renderManualResult(gdrive.manualMeta); }
+  try{ await gdriveListCandidates(); renderCandidates(); }catch(_){ /* list refresh is optional */ }
+  try{ await gdriveListTrashed(); }catch(_){ /* ditto */ }
+  renderSyncPanel();
+}
+async function gdriveListTrashed(){
+  const q = encodeURIComponent(`name='${GDRIVE_FILENAME}' and trashed=true`);
+  const fields = encodeURIComponent('files(id,name,createdTime,modifiedTime,size,ownedByMe,owners(emailAddress))');
+  const res = await gdriveApi(`files?q=${q}&fields=${fields}&orderBy=modifiedTime%20desc&pageSize=50&spaces=drive`);
+  gdrive.trashed = (await res.json()).files || [];
+  renderTrashed();
+}
+function renderTrashed(){
+  const box = document.getElementById('gdriveTrashList'); if (!box) return;
+  if (!gdrive.trashed.length){ box.innerHTML = '<div class="small-muted">ไม่พบไฟล์ accounting.db ในถังขยะที่แอปมองเห็น</div>'; return; }
+  box.innerHTML = '<div class="small-muted" style="margin-bottom:6px;">ไฟล์ ' + escapeHtml(GDRIVE_FILENAME) + ' ในถังขยะ (ล้างอัตโนมัติโดย Google Drive):</div>' + gdrive.trashed.map(f=>{
+    const owner = f.owners && f.owners[0] ? f.owners[0].emailAddress : '—';
+    const isCur = f.id === gdrive.fileId;
+    return `<div style="border:1px dashed var(--rust); border-radius:8px; padding:8px 10px; margin-bottom:6px; font-size:13px;">
+      <b>${escapeHtml(f.name || GDRIVE_FILENAME)}</b> <code>${escapeHtml(shortId(f.id))}</code> <span style="color:var(--rust);">(ในถังขยะ)</span> ${isCur ? '<span class="badge b-asset">กำลังใช้งานอยู่ในเครื่องนี้</span>' : ''}<br>
+      <span class="small-muted">แก้ไขล่าสุด ${escapeHtml(fmtDateTime(f.modifiedTime))} • สร้าง ${escapeHtml(fmtDateTime(f.createdTime))} • ${f.size ? (Number(f.size)/1024).toFixed(1) + ' KB' : '—'} • เจ้าของ ${escapeHtml(owner)}</span>
+      <div data-sum="${escapeHtml(f.id)}" style="margin:4px 0; white-space:pre-wrap;"></div>
+      <button class="pill-btn" data-act="inspect" data-id="${escapeHtml(f.id)}" style="padding:3px 10px;">ดูสรุปข้อมูลในไฟล์</button>
+      <button class="pill-btn primary" data-act="restore" data-id="${escapeHtml(f.id)}" style="padding:3px 10px;">กู้คืนจากถังขยะ</button>
+    </div>`;
+  }).join('');
+}
+
 async function gdriveInspectFile(id){
   const slot = Array.from(document.querySelectorAll('[data-sum]')).find(e=>e.dataset.sum === id);
   if (slot) slot.textContent = 'กำลังอ่านไฟล์...';
@@ -1867,19 +1939,27 @@ async function gdriveInspectFile(id){
 async function gdriveUseFile(id){
   if (!id || id === gdrive.fileId) return;
   const f = (gdrive.manualMeta && gdrive.manualMeta.id === id) ? gdrive.manualMeta : (gdrive.candidates.find(c=>c.id === id) || {});
+  let cmp = null;
   try{ // it must really be one of our databases — later saves would overwrite this file
     const res = await gdriveApi(`files/${id}?alt=media`);
     const probe = new SQL.Database(new Uint8Array(await res.arrayBuffer()));
-    probe.exec("SELECT 1 FROM journal LIMIT 1"); probe.close();
+    probe.exec("SELECT 1 FROM journal LIMIT 1");
+    cmp = compareJournals(journalRowMap(db), journalRowMap(probe));
+    probe.close();
   }catch(e){
     const m = 'ใช้ไฟล์นี้ไม่ได้ — ไม่ใช่ไฟล์ฐานข้อมูลบัญชีของแอปนี้ (' + e.message + ') จึงไม่ได้เปลี่ยนอะไร';
     gdriveSetStatus(m); toast(m); return;
   }
-  const msg = `เปลี่ยนไปซิงค์กับไฟล์ ${shortId(id)} ?\n\n- ข้อมูลในเครื่องนี้จะถูกแทนที่ด้วยข้อมูลจากไฟล์นั้น (แก้ไขล่าสุด ${fmtDateTime(f.modifiedTime)})\n- ระบบจะดาวน์โหลดไฟล์สำรองข้อมูลของเครื่องนี้ให้ก่อน เก็บไว้เผื่อต้องกลับมาใช้\n- เครื่องอื่นที่ซิงค์คนละไฟล์ ต้องเลือกไฟล์เดียวกันนี้ด้วย`;
+  const msg = `เปลี่ยนไปซิงค์กับไฟล์ ${shortId(id)} ?\n\n- ข้อมูลในเครื่องนี้จะถูกแทนที่ด้วยข้อมูลจากไฟล์นั้น (แก้ไขล่าสุด ${fmtDateTime(f.modifiedTime)})\n- ระบบจะดาวน์โหลดไฟล์สำรองข้อมูลของเครื่องนี้ให้ก่อน เก็บไว้เผื่อต้องกลับมาใช้\n- เครื่องอื่นที่ซิงค์คนละไฟล์ ต้องเลือกไฟล์เดียวกันนี้ด้วย`
+    + (cmp && cmp.onlyLocal ? `\n\n⚠ เครื่องนี้มี ${cmp.onlyLocal} รายการที่ไฟล์นั้นไม่มี — รายการเหล่านี้จะหายจากเครื่องนี้ (เก็บอยู่ในไฟล์สำรองที่ดาวน์โหลดให้)` : '')
+    + (cmp && cmp.changed ? `\n⚠ มี ${cmp.changed} รายการที่แก้ไขต่างกัน — จะใช้ตามไฟล์นั้น` : '')
+    + (cmp && cmp.onlyFile ? `\n- ไฟล์นั้นมีรายการเพิ่มที่เครื่องนี้ไม่มี ${cmp.onlyFile} รายการ (จะเพิ่มเข้ามา)` : '')
+    + (cmp && !cmp.onlyLocal && !cmp.onlyFile && !cmp.changed ? '\n- ข้อมูลเหมือนกับเครื่องนี้ทุกรายการ' : '');
   if (!confirm(msg)) return;
   try{ exportDb(); }catch(e){ console.warn('backup before switching failed:', e); }
   gdrive.fileId = id; gdrive.lastSyncedFp = null; idbKvSet('gdrive_last_fp', null); gdrive.lastKnownModifiedTime = null; gdrive.fileMeta = null; gdrive.filePath = null; gdrive.pathForId = null; gdriveDirty = false;
   await idbKvSet('gdrive_file_id', id); await idbKvSet('gdrive_last_modified', null);
+  await gdriveLogBinding(id, 'เลือกไฟล์ (จากรายการ/รหัส)');
   document.getElementById('gdriveFileChoice').style.display = 'none';
   gdriveSetStatus('เปลี่ยนไฟล์แล้ว — กำลังดาวน์โหลดข้อมูลจากไฟล์ใหม่...');
   await gdriveCheckAndPull();
@@ -1906,12 +1986,14 @@ function renderManualResult(meta){
     <span class="small-muted">แก้ไขล่าสุด ${escapeHtml(fmtDateTime(meta.modifiedTime))} • สร้าง ${escapeHtml(fmtDateTime(meta.createdTime))} • ${meta.size ? (Number(meta.size)/1024).toFixed(1) + ' KB' : '—'} • เจ้าของ ${escapeHtml(owner)}</span>
     <div data-sum="${escapeHtml(meta.id)}" style="margin:4px 0; white-space:pre-wrap;"></div>
     <button class="pill-btn" data-act="inspect" data-id="${escapeHtml(meta.id)}" style="padding:3px 10px;">ดูสรุปข้อมูลในไฟล์</button>
+    ${meta.trashed ? `<button class="pill-btn primary" data-act="restore" data-id="${escapeHtml(meta.id)}" style="padding:3px 10px;">กู้คืนจากถังขยะ</button>` : ''}
     ${isCur ? '' : `<button class="pill-btn primary" data-act="use" data-id="${escapeHtml(meta.id)}" style="padding:3px 10px;">ใช้ไฟล์นี้</button>`}
   </div>`;
 }
-async function gdriveCheckManualId(){
+async function gdriveCheckManualId(forcedId){
   const box = document.getElementById('gdriveManualResult');
   if (!gdrive.accessToken){ toast('เชื่อมต่อ Google Drive ก่อน'); return; }
+  if (typeof forcedId === 'string') document.getElementById('gdriveManualId').value = forcedId;
   const id = parseDriveId(document.getElementById('gdriveManualId').value);
   if (!id){ box.textContent = 'กรุณาวางรหัสไฟล์ หรือลิงก์ของไฟล์ใน Google Drive'; return; }
   box.textContent = 'กำลังตรวจสอบ...';
@@ -1929,9 +2011,11 @@ async function gdriveCheckManualId(){
 async function gdriveForgetFile(){
   if (!gdrive.fileId) return;
   if (!confirm(`เลิกผูกเครื่องนี้กับไฟล์ ${shortId(gdrive.fileId)} ?\n- ไฟล์ใน Google Drive ไม่ถูกลบ และข้อมูลในเครื่องนี้ยังอยู่ครบ\n- หลังจากนี้เครื่องนี้จะไม่ซิงค์จนกว่าจะเลือกหรือสร้างไฟล์ (ตัวเลือกจะขึ้นให้)\n- ถ้าเลือก "สร้างไฟล์ฐานข้อมูลใหม่" ระบบจะอัปโหลดข้อมูลของเครื่องนี้ขึ้นเป็นไฟล์ใหม่`)) return;
+  const prevId = gdrive.fileId;
   gdriveStopPolling();
   gdrive.fileId = null; gdrive.lastSyncedFp = null; gdrive.lastKnownModifiedTime = null; gdrive.fileMeta = null; gdrive.filePath = null; gdrive.pathForId = null; gdrive.candidates = []; gdriveDirty = false;
   await idbKvSet('gdrive_file_id', null); await idbKvSet('gdrive_last_modified', null); await idbKvSet('gdrive_last_fp', null);
+  await gdriveLogBinding(prevId, 'เลิกผูกไฟล์นี้');
   document.getElementById('gdriveFileChoice').style.display = 'block';
   document.getElementById('gdriveCandidates').innerHTML = '';
   gdriveSetStatus('เลิกผูกไฟล์แล้ว — เลือกด้านล่างว่าจะสร้างไฟล์ใหม่ หรือใช้ไฟล์ที่มีอยู่ (ตรวจสอบไฟล์ / วางรหัสไฟล์)');
@@ -1957,10 +2041,19 @@ function wireSyncPanel(){
     const b = e.target.closest('button[data-act]'); if (!b) return;
     if (b.dataset.act === 'inspect') gdriveInspectFile(b.dataset.id);
     else if (b.dataset.act === 'use') gdriveUseFile(b.dataset.id);
+    else if (b.dataset.act === 'restore') gdriveRestoreFromTrash(b.dataset.id);
+    else if (b.dataset.act === 'check') gdriveCheckManualId(b.dataset.id);
   };
   document.getElementById('gdriveCandidates').addEventListener('click', onResultClick);
   document.getElementById('gdriveManualResult').addEventListener('click', onResultClick);
-  document.getElementById('btnGdriveCheckId').addEventListener('click', gdriveCheckManualId);
+  document.getElementById('gdriveTrashList').addEventListener('click', onResultClick);
+  document.getElementById('gdriveHistory').addEventListener('click', onResultClick);
+  document.getElementById('btnGdriveListTrash').addEventListener('click', async ()=>{
+    if (!gdrive.accessToken){ toast('เชื่อมต่อ Google Drive ก่อน'); return; }
+    try{ await gdriveListTrashed(); }catch(e){ toast('อ่านรายการในถังขยะไม่สำเร็จ: ' + e.message); }
+  });
+  document.getElementById('btnGdriveRestoreCurrent').addEventListener('click', ()=>{ if (gdrive.fileId) gdriveRestoreFromTrash(gdrive.fileId); });
+  document.getElementById('btnGdriveCheckId').addEventListener('click', ()=>gdriveCheckManualId());
   document.getElementById('gdriveManualId').addEventListener('keydown', (e)=>{ if (e.key === 'Enter') gdriveCheckManualId(); });
   document.getElementById('btnGdriveForget').addEventListener('click', gdriveForgetFile);
   setInterval(()=>{ const v = document.getElementById('view-settings'); if (v && v.classList.contains('active')) updateSyncDynamic(); }, 1000);
