@@ -859,10 +859,12 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
             </div>
             <div id="gdriveSyncWarn" style="display:none; margin-top:10px; padding:8px 10px; border-radius:8px; background:var(--rust-soft); color:var(--rust); font-size:13px; white-space:pre-wrap;"></div>
             <div id="gdriveRestoreRow" style="display:none; margin-top:8px;"><button class="pill-btn primary" id="btnGdriveRestoreCurrent">กู้คืนไฟล์ที่ใช้อยู่จากถังขยะ</button></div>
+            <div id="gdriveRenameRow" style="display:none; margin-top:8px;"><button class="pill-btn primary" id="btnGdriveRenameCurrent">เปลี่ยนชื่อไฟล์นี้เป็น accounting.db</button></div>
             <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
               <button class="pill-btn" id="btnGdriveListFiles">ตรวจสอบไฟล์ accounting.db ใน Drive</button>
               <button class="pill-btn" id="btnGdriveRefreshMeta">รีเฟรชข้อมูลไฟล์</button>
               <button class="pill-btn" id="btnGdriveListTrash">ดูไฟล์ accounting.db ในถังขยะ</button>
+              <button class="pill-btn" id="btnGdriveTidy">จัดระเบียบ: ย้ายไฟล์ซ้ำที่ข้อมูลเหมือนกันไปถังขยะ</button>
             </div>
             <div id="gdriveCandidates" style="margin-top:10px;"></div>
             <div id="gdriveTrashList" style="margin-top:10px;"></div>
@@ -885,7 +887,7 @@ hr.rule{border:none; border-top:1px solid var(--line); margin:20px 0;}
           </div>
 
           <div id="gdriveFileChoice" style="display:none; margin-bottom:14px; padding:14px; border:1px dashed var(--brass); border-radius:8px; background:var(--brass-soft);">
-            <p style="margin:0 0 10px; font-size:13px;">
+            <p id="gdriveChoiceIntro" style="margin:0 0 10px; font-size:13px;">
               บัญชีนี้ยังไม่เจอไฟล์ฐานข้อมูลของตัวเอง — เลือกอย่างใดอย่างหนึ่ง:
             </p>
             <div class="row-flex" style="gap:10px; flex-wrap:wrap;">
@@ -1347,7 +1349,15 @@ async function gdriveAfterConnect(){
     const found = await gdriveSearchForOwnFile();
     if (!found){
       document.getElementById('gdriveFileChoice').style.display = 'block';
-      gdriveSetStatus(`เชื่อมต่อแล้ว${gdrive.signedInEmail? ' ('+gdrive.signedInEmail+')':''} — ยังไม่พบไฟล์ฐานข้อมูลของบัญชีนี้ เลือกตัวเลือกด้านล่าง`);
+      const n = gdrive.candidates.length, intro = document.getElementById('gdriveChoiceIntro');
+      if (n > 1){
+        if (intro) intro.textContent = `พบไฟล์ accounting.db ใน Drive ${n} ไฟล์ — ระบบจะไม่เดาให้ กรุณาเลือกไฟล์ที่ต้องการใช้จากรายการด้านล่าง (กด "ดูสรุปข้อมูลในไฟล์" เพื่อเทียบกับเครื่องนี้) หรือสร้างไฟล์ใหม่:`;
+        renderCandidates();
+        gdriveSetStatus(`เชื่อมต่อแล้ว${gdrive.signedInEmail? ' ('+gdrive.signedInEmail+')':''} — พบไฟล์ accounting.db ${n} ไฟล์ กรุณาเลือกไฟล์ที่ต้องการใช้`);
+      } else {
+        if (intro) intro.textContent = 'บัญชีนี้ยังไม่เจอไฟล์ฐานข้อมูลของตัวเอง — เลือกอย่างใดอย่างหนึ่ง:';
+        gdriveSetStatus(`เชื่อมต่อแล้ว${gdrive.signedInEmail? ' ('+gdrive.signedInEmail+')':''} — ยังไม่พบไฟล์ฐานข้อมูลของบัญชีนี้ เลือกตัวเลือกด้านล่าง`);
+      }
       return;
     }
   }
@@ -1359,15 +1369,15 @@ async function gdriveAfterConnect(){
 }
 
 async function gdriveSearchForOwnFile(){
-  // drive.file scope only returns files this specific account created/opened with the app.
-  // Newest first, so a device that has no saved choice always lands on the most recently updated copy.
+  // drive.file scope only returns files this account created/opened with the app.
+  // Exactly one match -> use it. None -> the user creates/picks one. Several -> the user chooses:
+  // silently taking "the newest" is how different devices ended up on different files.
   const files = await gdriveListCandidates();
-  if (files.length){
+  if (files.length === 1){
     gdrive.fileId = files[0].id;
     await idbKvSet('gdrive_file_id', gdrive.fileId);
-    await gdriveLogBinding(gdrive.fileId, 'ค้นเจออัตโนมัติ (ไฟล์ใหม่สุด)');
-    // deliberately NOT setting lastKnownModifiedTime here — this may be the first time
-    // this device has seen this file, so the next gdriveCheckAndPull() must actually pull it.
+    await gdriveLogBinding(gdrive.fileId, 'ค้นเจออัตโนมัติ (มีไฟล์เดียว)');
+    // deliberately NOT setting lastKnownModifiedTime: the next gdriveCheckAndPull() must really pull it.
     return true;
   }
   return false;
@@ -1795,9 +1805,11 @@ function renderSyncPanel(){
   }
   const msgs = [];
   if (gdrive.candidates.length > 1) msgs.push(`พบไฟล์ ${GDRIVE_FILENAME} ใน Drive ${gdrive.candidates.length} ไฟล์ — เครื่องนี้ใช้ไฟล์ ${shortId(gdrive.fileId)}\nถ้าเครื่องอื่นแสดงรหัสไฟล์ไม่เหมือนกัน แปลว่าซิงค์คนละไฟล์ (กดปุ่ม "ตรวจสอบไฟล์" ด้านล่างเพื่อดูสรุปข้อมูลแต่ละไฟล์ แล้วเลือกให้ทุกเครื่องใช้ไฟล์เดียวกัน)`);
+  if (m && m.name && m.name !== GDRIVE_FILENAME) msgs.push(`ไฟล์ที่เครื่องนี้ใช้อยู่ชื่อ "${m.name}" ไม่ใช่ ${GDRIVE_FILENAME} — เครื่องใหม่ที่ค้นหาด้วยชื่อ ${GDRIVE_FILENAME} จะหาไฟล์นี้ไม่เจอ (กดปุ่ม "เปลี่ยนชื่อไฟล์นี้เป็น ${GDRIVE_FILENAME}")`);
   if (m && m.trashed) msgs.push('ไฟล์ที่เครื่องนี้ใช้อยู่ ถูกย้ายไปอยู่ใน "ถังขยะ" ของ Google Drive — ควรกู้คืนไฟล์ หรือเปลี่ยนไปใช้ไฟล์อื่น');
   if (gdrive.candidates.length && gdrive.fileId && !gdrive.candidates.some(f=>f.id === gdrive.fileId)) msgs.push(`ไฟล์ที่เครื่องนี้ใช้อยู่ (${shortId(gdrive.fileId)}) ไม่พบจากการค้นหาชื่อ ${GDRIVE_FILENAME} — เครื่องอื่นจึงมองไม่เห็นไฟล์นี้ และมักสร้างไฟล์ใหม่ของตัวเองขึ้นมาแทน (ทำให้ซิงค์คนละไฟล์)\n${(m && m.trashed === false) ? 'ไฟล์นี้ไม่ได้อยู่ในถังขยะ — อาจสร้างจากแอปเวอร์ชัน/Client ID อื่น หรือแอปเสียสิทธิ์ระดับไฟล์หลังมีการเพิกถอนสิทธิ์' : 'สาเหตุที่พบบ่อย: ไฟล์อยู่ในถังขยะ หรือสร้างจากแอปเวอร์ชัน/Client ID อื่น'}\nแนะนำ: กด "ดูสรุปข้อมูลในไฟล์" ของไฟล์ด้านล่าง ถ้าตรงกับเครื่องนี้ให้กด "ใช้ไฟล์นี้"`);
   if (gdrive.metaError) msgs.push('อ่านข้อมูลไฟล์ไม่สำเร็จ: ' + gdrive.metaError);
+  const nr = document.getElementById('gdriveRenameRow'); if (nr) nr.style.display = (m && m.name && m.name !== GDRIVE_FILENAME) ? 'block' : 'none';
   const rr = document.getElementById('gdriveRestoreRow'); if (rr) rr.style.display = (m && m.trashed) ? 'block' : 'none';
   renderHistory();
   const warn = document.getElementById('gdriveSyncWarn');
@@ -1833,7 +1845,7 @@ function renderCandidates(){
       <span class="small-muted">แก้ไขล่าสุด ${escapeHtml(fmtDateTime(f.modifiedTime))} • สร้าง ${escapeHtml(fmtDateTime(f.createdTime))} • ${f.size ? (Number(f.size)/1024).toFixed(1) + ' KB' : '—'} • เจ้าของ ${escapeHtml(owner)}</span>
       <div data-sum="${escapeHtml(f.id)}" style="margin:4px 0; white-space:pre-wrap;"></div>
       <button class="pill-btn" data-act="inspect" data-id="${escapeHtml(f.id)}" style="padding:3px 10px;">ดูสรุปข้อมูลในไฟล์</button>
-      ${isCur ? '' : `<button class="pill-btn primary" data-act="use" data-id="${escapeHtml(f.id)}" style="padding:3px 10px;">ใช้ไฟล์นี้</button>`}
+      ${isCur ? '' : `<button class="pill-btn primary" data-act="use" data-id="${escapeHtml(f.id)}" style="padding:3px 10px;">ใช้ไฟล์นี้</button> <button class="pill-btn" data-act="trash" data-id="${escapeHtml(f.id)}" style="padding:3px 10px; color:var(--rust); border-color:var(--rust);">ย้ายไปถังขยะ</button>`}
       ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" style="margin-left:6px;">เปิดใน Drive</a>` : ''}
     </div>`;
   }).join('');
@@ -1912,28 +1924,91 @@ function renderTrashed(){
   }).join('');
 }
 
-async function gdriveInspectFile(id){
-  const slot = Array.from(document.querySelectorAll('[data-sum]')).find(e=>e.dataset.sum === id);
-  if (slot) slot.textContent = 'กำลังอ่านไฟล์...';
+async function gdriveProbeFile(id){
+  const res = await gdriveApi(`files/${encodeURIComponent(id)}?alt=media`);
+  const probe = new SQL.Database(new Uint8Array(await res.arrayBuffer()));
   try{
-    const res = await gdriveApi(`files/${id}?alt=media`);
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    const probe = new SQL.Database(bytes);
     const r = probe.exec("SELECT COUNT(*), MAX(j_date), COUNT(DISTINCT code) FROM journal")[0].values[0];
     const cmp = compareJournals(journalRowMap(db), journalRowMap(probe));
     const metaSame = canonTable(db, "SELECT code,cdesc,type_acc,use_flag FROM acc_chart") === canonTable(probe, "SELECT code,cdesc,type_acc,use_flag FROM acc_chart")
                   && canonTable(db, "SELECT code,place,memo FROM acc_note") === canonTable(probe, "SELECT code,place,memo FROM acc_note");
-    probe.close();
-    const lines = [`ข้อมูลในไฟล์: ${Number(r[0]).toLocaleString('th-TH')} รายการ • รายการล่าสุด ${r[1] ? fmtDate(r[1]) : '—'} • ใช้ ${r[2]} บัญชี`];
+    return { count:r[0], maxDate:r[1], accounts:r[2], cmp, metaSame, identical: !cmp.onlyLocal && !cmp.onlyFile && !cmp.changed && metaSame };
+  } finally { probe.close(); }
+}
+
+async function gdriveRenameFile(id){
+  if (!confirm(`เปลี่ยนชื่อไฟล์ ${shortId(id)} ใน Google Drive เป็น "${GDRIVE_FILENAME}" ?\n- รหัสไฟล์และข้อมูลไม่เปลี่ยน\n- เครื่องใหม่ที่ค้นหาด้วยชื่อ ${GDRIVE_FILENAME} จะเจอไฟล์นี้ (ถ้าไฟล์ไม่อยู่ในถังขยะ)`)) return;
+  try{
+    await gdriveApi(`files/${encodeURIComponent(id)}?fields=id,name`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: GDRIVE_FILENAME }) });
+  }catch(e){ toast('เปลี่ยนชื่อไม่สำเร็จ: ' + e.message); return; }
+  toast(`เปลี่ยนชื่อไฟล์ ${shortId(id)} เป็น ${GDRIVE_FILENAME} แล้ว`);
+  if (id === gdrive.fileId) await gdriveRefreshMeta();
+  if (gdrive.manualMeta && gdrive.manualMeta.id === id){ gdrive.manualMeta.name = GDRIVE_FILENAME; renderManualResult(gdrive.manualMeta); }
+  try{ await gdriveListCandidates(); renderCandidates(); }catch(_){ /* list refresh is optional */ }
+  renderSyncPanel();
+}
+
+async function gdriveInspectFile(id){
+  const slot = Array.from(document.querySelectorAll('[data-sum]')).find(e=>e.dataset.sum === id);
+  if (slot) slot.textContent = 'กำลังอ่านไฟล์...';
+  try{
+    const p = await gdriveProbeFile(id), cmp = p.cmp;
+    const lines = [`ข้อมูลในไฟล์: ${Number(p.count).toLocaleString('th-TH')} รายการ • รายการล่าสุด ${p.maxDate ? fmtDate(p.maxDate) : '—'} • ใช้ ${p.accounts} บัญชี`];
     if (!cmp.onlyLocal && !cmp.onlyFile && !cmp.changed) lines.push('เทียบกับเครื่องนี้ (ทีละรายการ): เหมือนกันทุกรายการ ✓');
     else lines.push('เทียบกับเครื่องนี้: ' + [
       cmp.onlyFile ? `ไฟล์มีรายการที่เครื่องนี้ไม่มี ${cmp.onlyFile} รายการ` : null,
       cmp.onlyLocal ? `เครื่องนี้มีรายการที่ไฟล์ไม่มี ${cmp.onlyLocal} รายการ` : null,
       cmp.changed ? `แก้ไขต่างกัน ${cmp.changed} รายการ` : null
     ].filter(Boolean).join(' • ') + ` (ตรงกัน ${cmp.same} รายการ)`);
-    lines.push('ผังบัญชี + บันทึกช่วยจำ: ' + (metaSame ? 'เหมือนกับเครื่องนี้ ✓' : 'ต่างจากเครื่องนี้'));
+    lines.push('ผังบัญชี + บันทึกช่วยจำ: ' + (p.metaSame ? 'เหมือนกับเครื่องนี้ ✓' : 'ต่างจากเครื่องนี้'));
     if (slot) slot.textContent = lines.join('\n');
   }catch(e){ if (slot) slot.textContent = 'อ่านไฟล์ไม่สำเร็จ: ' + e.message; }
+}
+
+/* ---- tidy up: move extra copies to the Drive trash (recoverable for 30 days) ---- */
+async function gdriveSetTrashed(id, trashed){
+  await gdriveApi(`files/${encodeURIComponent(id)}?fields=id,trashed`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ trashed }) });
+}
+async function gdriveTrashFile(id){
+  if (!id) return;
+  if (id === gdrive.fileId){ toast('ไฟล์ที่เครื่องนี้ใช้อยู่ ย้ายไปถังขยะจากตรงนี้ไม่ได้'); return; }
+  let note = '';
+  try{
+    const p = await gdriveProbeFile(id);
+    if (p.cmp.onlyFile) note += `\n⚠ ไฟล์นี้มี ${p.cmp.onlyFile} รายการที่เครื่องนี้ไม่มี — ย้ายแล้วรายการเหล่านั้นจะไม่อยู่ในไฟล์ที่ใช้งานอีก`;
+    if (p.cmp.changed) note += `\n⚠ มี ${p.cmp.changed} รายการที่แก้ไขต่างจากเครื่องนี้`;
+    if (!p.cmp.onlyFile && !p.cmp.changed) note += '\n- รายการทั้งหมดในไฟล์นี้มีอยู่ในเครื่องนี้แล้ว';
+  }catch(e){ note += '\n(อ่านไฟล์นี้ไม่ได้ จึงเทียบข้อมูลไม่ได้)'; }
+  if (!confirm(`ย้ายไฟล์ ${shortId(id)} ไปถังขยะของ Google Drive ?${note}\n\nกู้คืนได้ภายใน 30 วัน (ปุ่ม "ดูไฟล์ accounting.db ในถังขยะ")`)) return;
+  try{ await gdriveSetTrashed(id, true); }catch(e){ toast('ย้ายไม่สำเร็จ: ' + e.message); return; }
+  toast(`ย้ายไฟล์ ${shortId(id)} ไปถังขยะแล้ว`);
+  try{ await gdriveListCandidates(); renderCandidates(); }catch(_){ /* list refresh is optional */ }
+}
+async function gdriveTidyDuplicates(){
+  if (!gdrive.accessToken || !gdrive.fileId){ toast('เชื่อมต่อและเลือกไฟล์ก่อน'); return; }
+  // "identical to this device" only means "identical to the file in use" while this device is fully synced
+  if (gdriveDirty || gdrive.syncing || gdrive.lastSyncedFp !== dbFingerprint(db.export())){
+    toast('ข้อมูลในเครื่องยังไม่ตรงกับไฟล์ที่ใช้อยู่ (ยังซิงค์ไม่เสร็จ) — รอสักครู่แล้วลองใหม่'); return;
+  }
+  try{ await gdriveListCandidates(); }catch(e){ toast('อ่านรายการไฟล์ไม่สำเร็จ: ' + e.message); return; }
+  const others = gdrive.candidates.filter(f=>f.id !== gdrive.fileId);
+  renderCandidates();
+  if (!others.length){ toast('ไม่มีไฟล์ accounting.db อื่นให้จัดระเบียบ'); return; }
+  const same = [], diff = [], bad = [];
+  for (const f of others){
+    try{ const p = await gdriveProbeFile(f.id); (p.identical ? same : diff).push(f); }catch(_){ bad.push(f); }
+  }
+  if (!same.length){ toast(`ไม่มีไฟล์ที่ข้อมูลเหมือนไฟล์ที่ใช้อยู่ทุกรายการ (ต่างกัน ${diff.length} ไฟล์${bad.length ? ', อ่านไม่ได้ ' + bad.length + ' ไฟล์' : ''}) — ไม่ได้ย้ายอะไร`); return; }
+  const list = a => a.map(f=>`  • ${shortId(f.id)} (แก้ไขล่าสุด ${fmtDateTime(f.modifiedTime)})`).join('\n');
+  const msg = `ไฟล์ที่ข้อมูลเหมือนไฟล์ที่ใช้อยู่ทุกรายการ ${same.length} ไฟล์ จะย้ายไปถังขยะ:\n${list(same)}\n\n`
+    + (diff.length ? `ไฟล์ที่ข้อมูลต่างกัน ${diff.length} ไฟล์ จะไม่แตะต้อง (ตรวจเองด้วยปุ่ม "ดูสรุปข้อมูลในไฟล์"):\n${list(diff)}\n\n` : '')
+    + (bad.length ? `ไฟล์ที่อ่านไม่ได้ ${bad.length} ไฟล์ จะไม่แตะต้อง\n\n` : '')
+    + 'กู้คืนได้จากถังขยะภายใน 30 วัน';
+  if (!confirm(msg)) return;
+  let done = 0;
+  for (const f of same){ try{ await gdriveSetTrashed(f.id, true); done++; }catch(_){ /* leave it */ } }
+  try{ await gdriveListCandidates(); renderCandidates(); }catch(_){ /* list refresh is optional */ }
+  toast(`ย้ายไฟล์ซ้ำที่ข้อมูลเหมือนกันไปถังขยะแล้ว ${done} ไฟล์`);
 }
 
 async function gdriveUseFile(id){
@@ -1956,7 +2031,7 @@ async function gdriveUseFile(id){
     + (cmp && cmp.onlyFile ? `\n- ไฟล์นั้นมีรายการเพิ่มที่เครื่องนี้ไม่มี ${cmp.onlyFile} รายการ (จะเพิ่มเข้ามา)` : '')
     + (cmp && !cmp.onlyLocal && !cmp.onlyFile && !cmp.changed ? '\n- ข้อมูลเหมือนกับเครื่องนี้ทุกรายการ' : '');
   if (!confirm(msg)) return;
-  try{ exportDb(); }catch(e){ console.warn('backup before switching failed:', e); }
+  try{ exportDb('accounting-backup-before-switch'); }catch(e){ console.warn('backup before switching failed:', e); }
   gdrive.fileId = id; gdrive.lastSyncedFp = null; idbKvSet('gdrive_last_fp', null); gdrive.lastKnownModifiedTime = null; gdrive.fileMeta = null; gdrive.filePath = null; gdrive.pathForId = null; gdriveDirty = false;
   await idbKvSet('gdrive_file_id', id); await idbKvSet('gdrive_last_modified', null);
   await gdriveLogBinding(id, 'เลือกไฟล์ (จากรายการ/รหัส)');
@@ -1987,6 +2062,7 @@ function renderManualResult(meta){
     <div data-sum="${escapeHtml(meta.id)}" style="margin:4px 0; white-space:pre-wrap;"></div>
     <button class="pill-btn" data-act="inspect" data-id="${escapeHtml(meta.id)}" style="padding:3px 10px;">ดูสรุปข้อมูลในไฟล์</button>
     ${meta.trashed ? `<button class="pill-btn primary" data-act="restore" data-id="${escapeHtml(meta.id)}" style="padding:3px 10px;">กู้คืนจากถังขยะ</button>` : ''}
+    ${meta.name && meta.name !== GDRIVE_FILENAME ? `<button class="pill-btn" data-act="rename" data-id="${escapeHtml(meta.id)}" style="padding:3px 10px;">เปลี่ยนชื่อเป็น accounting.db</button>` : ''}
     ${isCur ? '' : `<button class="pill-btn primary" data-act="use" data-id="${escapeHtml(meta.id)}" style="padding:3px 10px;">ใช้ไฟล์นี้</button>`}
   </div>`;
 }
@@ -2042,6 +2118,8 @@ function wireSyncPanel(){
     if (b.dataset.act === 'inspect') gdriveInspectFile(b.dataset.id);
     else if (b.dataset.act === 'use') gdriveUseFile(b.dataset.id);
     else if (b.dataset.act === 'restore') gdriveRestoreFromTrash(b.dataset.id);
+    else if (b.dataset.act === 'trash') gdriveTrashFile(b.dataset.id);
+    else if (b.dataset.act === 'rename') gdriveRenameFile(b.dataset.id);
     else if (b.dataset.act === 'check') gdriveCheckManualId(b.dataset.id);
   };
   document.getElementById('gdriveCandidates').addEventListener('click', onResultClick);
@@ -2052,6 +2130,8 @@ function wireSyncPanel(){
     if (!gdrive.accessToken){ toast('เชื่อมต่อ Google Drive ก่อน'); return; }
     try{ await gdriveListTrashed(); }catch(e){ toast('อ่านรายการในถังขยะไม่สำเร็จ: ' + e.message); }
   });
+  document.getElementById('btnGdriveTidy').addEventListener('click', gdriveTidyDuplicates);
+  document.getElementById('btnGdriveRenameCurrent').addEventListener('click', ()=>{ if (gdrive.fileId) gdriveRenameFile(gdrive.fileId); });
   document.getElementById('btnGdriveRestoreCurrent').addEventListener('click', ()=>{ if (gdrive.fileId) gdriveRestoreFromTrash(gdrive.fileId); });
   document.getElementById('btnGdriveCheckId').addEventListener('click', ()=>gdriveCheckManualId());
   document.getElementById('gdriveManualId').addEventListener('keydown', (e)=>{ if (e.key === 'Enter') gdriveCheckManualId(); });
@@ -3989,11 +4069,14 @@ function onImportFile(e){
   };
   reader.readAsArrayBuffer(file);
 }
-function exportDb(){
+function exportDb(prefix){
+  const d = new Date(), p = n=>String(n).padStart(2,'0');
+  const stamp = `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  const name = `${typeof prefix === 'string' ? prefix : 'accounting'}-${stamp}.db`;
   const bytes = db.export();
   const blob = new Blob([bytes], {type:'application/x-sqlite3'});
-  downloadBlob(blob, 'accounting.db');
-  toast('ดาวน์โหลดฐานข้อมูลแล้ว');
+  downloadBlob(blob, name);
+  toast(`ดาวน์โหลดฐานข้อมูลแล้ว (${name})`);
 }
 function exportCsv(){
   const rows = qAll(`SELECT j.j_date, j.code, a.cdesc, a.type_acc, j.db_amt, j.cr_amt, j.jremark FROM journal j JOIN acc_chart a ON a.code=j.code ORDER BY j.j_date`);
